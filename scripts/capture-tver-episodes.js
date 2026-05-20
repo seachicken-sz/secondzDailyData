@@ -93,16 +93,10 @@ function parseBroadcastDateParts(broadcastLabel) {
 
 /**
  * program_master.time を読む。
- *
- * 対応例:
- * - 21:58
- * - 25:05
- * - 28:00
- * - 21：58
  */
 function parseProgramTime(timeText) {
   const text = normalizeText(timeText).replace('：', ':');
-  const match = text.match(/^(\d{1,2})\s*:\s*(\d{2})$/);
+  const match = text.match(/^(\d{1,2})\s*:\s*(\d{2})(?::\d{2})?$/);
 
   if (!match) {
     return null;
