@@ -340,7 +340,14 @@ async function captureEpisodesForProgram(page, program) {
       const episodeId = extractEpisodeIdFromHref(href);
       const programId = extractProgramIdFromUrl(program.url);
       const startAt = buildStartAt(broadcastLabel, program.time);
-
+console.log({
+  program: program.title,
+  week: program.week,
+  time: program.time,
+  broadcastLabel,
+  startAt,
+  startAtText: buildStartAtText(startAt, program.week),
+});
       return {
         episode_id: episodeId,
         program_id: programId,
