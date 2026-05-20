@@ -17,6 +17,22 @@ function normalizeText(value) {
     .trim();
 }
 
+/**
+ * 日付・時刻パース用の正規化。
+ * - 全角数字を半角へ
+ * - 全角コロンを半角へ
+ * - ゼロ幅スペースなど不可視文字を除去
+ * - 連続空白を1つにする
+ */
+function normalizeForParse(value) {
+  return String(value || '')
+    .replace(/[０-９]/g, (char) => String.fromCharCode(char.charCodeAt(0) - 0xFEE0))
+    .replace(/：/g, ':')
+    .replace(/[\u200B-\u200D\uFEFF]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 function toAbsoluteUrl(href) {
   if (!href) {
     return '';
@@ -40,11 +56,12 @@ function extractProgramIdFromUrl(url) {
 }
 
 function isBroadcastLabel(text) {
-  return /\d{1,2}\s*月\s*\d{1,2}\s*日(?:\(.+?\))?\s*放送分/.test(text);
+  const normalized = normalizeForParse(text);
+  return /\d{1,2}\s*月\s*\d{1,2}\s*日(?:\(.+?\))?\s*放送分/.test(normalized);
 }
 
 function isEndLabel(text) {
-  return /終了予定/.test(text);
+  return /終了予定/.test(normalizeForParse(text));
 }
 
 function getCurrentYearInJst() {
@@ -61,10 +78,16 @@ function pad2(value) {
 }
 
 function parseBroadcastDateParts(broadcastLabel) {
-  const text = normalizeText(broadcastLabel);
+  const text = normalizeForParse(broadcastLabel);
+
   const match = text.match(/(?:(\d{4})年)?\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日/);
 
   if (!match) {
+    console.log({
+      reason: 'parseBroadcastDateParts failed',
+      broadcastLabel,
+      normalized: text,
+    });
     return null;
   }
 
@@ -81,6 +104,14 @@ function parseBroadcastDateParts(broadcastLabel) {
     day < 1 ||
     day > 31
   ) {
+    console.log({
+      reason: 'parseBroadcastDateParts invalid date',
+      broadcastLabel,
+      normalized: text,
+      year,
+      month,
+      day,
+    });
     return null;
   }
 
@@ -93,23 +124,33 @@ function parseBroadcastDateParts(broadcastLabel) {
 
 /**
  * program_master.time を読む。
+ *
+ * 対応例:
+ * - 1:00
+ * - 01:00
+ * - 14:00
+ * - 14:00:00
+ * - 25:05
+ * - 28:00:00
+ * - Sat Dec 30 1899 11:56:00 GMT+0900 (Japan Standard Time)
  */
 function parseProgramTime(timeText) {
-  const text = normalizeText(timeText).replace('：', ':');
+  const text = normalizeForParse(timeText);
 
-  // 対応:
-  // 14:00
-  // 14:00:00
-  // 25:05
-  // 28:00:00
-  // Sat Dec 30 1899 11:56:00 GMT+0900 (Japan Standard Time)
+  // 通常の時刻文字列。
   let match = text.match(/^(\d{1,2})\s*:\s*(\d{2})(?::\d{2})?$/);
 
+  // Google Sheetsの時刻がDate文字列として渡った場合の救済。
   if (!match) {
     match = text.match(/\b(\d{1,2}):(\d{2})(?::\d{2})?\b/);
   }
 
   if (!match) {
+    console.log({
+      reason: 'parseProgramTime failed',
+      timeText,
+      normalized: text,
+    });
     return null;
   }
 
@@ -124,6 +165,13 @@ function parseProgramTime(timeText) {
     minute < 0 ||
     minute > 59
   ) {
+    console.log({
+      reason: 'parseProgramTime invalid time',
+      timeText,
+      normalized: text,
+      hour,
+      minute,
+    });
     return null;
   }
 
@@ -137,7 +185,8 @@ function parseProgramTime(timeText) {
  * broadcast_label の年月日 + program_master.time から start_at を作る。
  *
  * 28時間制:
- * - 24:00 以上は翌日に送る
+ * - 24:00以上は翌日に送る
+ * - 25:00 => 翌日01:00
  * - 28:00 => 翌日04:00
  */
 function buildStartAt(broadcastLabel, programTime) {
@@ -145,6 +194,13 @@ function buildStartAt(broadcastLabel, programTime) {
   const timeParts = parseProgramTime(programTime);
 
   if (!dateParts || !timeParts) {
+    console.log({
+      reason: 'buildStartAt failed',
+      broadcastLabel,
+      programTime,
+      dateParts,
+      timeParts,
+    });
     return '';
   }
 
@@ -181,10 +237,18 @@ function buildStartAt(broadcastLabel, programTime) {
  * => 5月15日(金) 1:00 放送
  */
 function buildStartAtText(startAt, week) {
-  const text = normalizeText(startAt);
+  const text = normalizeForParse(startAt);
   const match = text.match(/^(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2})$/);
 
   if (!match) {
+    if (startAt) {
+      console.log({
+        reason: 'buildStartAtText failed',
+        startAt,
+        normalized: text,
+        week,
+      });
+    }
     return '';
   }
 
@@ -209,6 +273,17 @@ function buildStartAtText(startAt, week) {
     minute < 0 ||
     minute > 59
   ) {
+    console.log({
+      reason: 'buildStartAtText invalid',
+      startAt,
+      normalized: text,
+      year,
+      month,
+      day,
+      hour,
+      minute,
+      week,
+    });
     return '';
   }
 
@@ -227,7 +302,7 @@ function buildStartAtText(startAt, week) {
 }
 
 function parseEndAt(endLabel) {
-  const text = normalizeText(endLabel);
+  const text = normalizeForParse(endLabel);
 
   const match = text.match(
     /(?:(\d{4})年)?\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日(?:\(.+?\))?\s*(\d{1,2})\s*:\s*(\d{2})/
@@ -258,6 +333,16 @@ function parseEndAt(endLabel) {
     minute < 0 ||
     minute > 59
   ) {
+    console.log({
+      reason: 'parseEndAt invalid',
+      endLabel,
+      normalized: text,
+      year,
+      month,
+      day,
+      hour,
+      minute,
+    });
     return '';
   }
 
@@ -351,14 +436,17 @@ async function captureEpisodesForProgram(page, program) {
       const episodeId = extractEpisodeIdFromHref(href);
       const programId = extractProgramIdFromUrl(program.url);
       const startAt = buildStartAt(broadcastLabel, program.time);
-console.log({
-  program: program.title,
-  week: program.week,
-  time: program.time,
-  broadcastLabel,
-  startAt,
-  startAtText: buildStartAtText(startAt, program.week),
-});
+      const startAtText = buildStartAtText(startAt, program.week);
+
+      console.log({
+        program: program.title,
+        week: program.week,
+        time: program.time,
+        broadcastLabel,
+        startAt,
+        startAtText,
+      });
+
       return {
         episode_id: episodeId,
         program_id: programId,
@@ -367,7 +455,7 @@ console.log({
         episode_url: toAbsoluteUrl(href),
         broadcast_label: broadcastLabel,
         start_at: startAt,
-        start_at_text: buildStartAtText(startAt, program.week),
+        start_at_text: startAtText,
         end_label: endLabel,
         end_at: parseEndAt(endLabel),
         end_flag: false,
