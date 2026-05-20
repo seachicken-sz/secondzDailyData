@@ -35,7 +35,7 @@ function extractEpisodeIdFromHref(href) {
 }
 
 function isBroadcastLabel(text) {
-  return /月\d{1,2}日\(.+?\)放送分/.test(text);
+  return /\d{1,2}\s*月\s*\d{1,2}\s*日(?:\(.+?\))?\s*放送分/.test(text);
 }
 
 function isEndLabel(text) {
