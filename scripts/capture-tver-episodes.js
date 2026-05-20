@@ -96,7 +96,18 @@ function parseBroadcastDateParts(broadcastLabel) {
  */
 function parseProgramTime(timeText) {
   const text = normalizeText(timeText).replace('：', ':');
-  const match = text.match(/^(\d{1,2})\s*:\s*(\d{2})(?::\d{2})?$/);
+
+  // 対応:
+  // 14:00
+  // 14:00:00
+  // 25:05
+  // 28:00:00
+  // Sat Dec 30 1899 11:56:00 GMT+0900 (Japan Standard Time)
+  let match = text.match(/^(\d{1,2})\s*:\s*(\d{2})(?::\d{2})?$/);
+
+  if (!match) {
+    match = text.match(/\b(\d{1,2}):(\d{2})(?::\d{2})?\b/);
+  }
 
   if (!match) {
     return null;
