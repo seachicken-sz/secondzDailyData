@@ -70,7 +70,14 @@ function getCurrentYearInJst() {
     year: 'numeric',
   });
 
-  return Number(formatter.format(new Date()));
+  const text = formatter.format(new Date());
+  const match = text.match(/\d{4}/);
+
+  if (!match) {
+    throw new Error(`Failed to parse current year: ${text}`);
+  }
+
+  return Number(match[0]);
 }
 
 function pad2(value) {
