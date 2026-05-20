@@ -42,6 +42,38 @@ function isEndLabel(text) {
   return /終了予定/.test(text);
 }
 
+function getCurrentYearInJst() {
+  const formatter = new Intl.DateTimeFormat('ja-JP', {
+    timeZone: 'Asia/Tokyo',
+    year: 'numeric',
+  });
+
+  return Number(formatter.format(new Date()));
+}
+
+function pad2(value) {
+  return String(value).padStart(2, '0');
+}
+
+function parseBroadcastDate(broadcastLabel) {
+  const text = normalizeText(broadcastLabel);
+  const match = text.match(/(?:(\d{4})年)?(\d{1,2})月(\d{1,2})日/);
+
+  if (!match) {
+    return '';
+  }
+
+  const year = match[1] ? Number(match[1]) : getCurrentYearInJst();
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+
+  if (!year || !month || !day) {
+    return '';
+  }
+
+  return `${year}-${pad2(month)}-${pad2(day)}`;
+}
+
 async function fetchProgramsFromGas() {
   const url = new URL(GAS_WEB_APP_URL);
 
@@ -72,7 +104,6 @@ async function captureEpisodesForProgram(page, program) {
     timeout: 60000,
   });
 
-  // TVer側の遅延描画対策。
   await page.waitForTimeout(1500);
 
   const rawEpisodes = await page.evaluate(() => {
@@ -93,7 +124,6 @@ async function captureEpisodesForProgram(page, program) {
       return [];
     }
 
-    // /live/simul は除外し、/episodes/ のみ対象にする。
     const links = Array.from(
       mainSeasonBlock.querySelectorAll('a[href^="/episodes/"]')
     );
@@ -127,7 +157,6 @@ async function captureEpisodesForProgram(page, program) {
 
       const broadcastLabel = subInfoTexts.find(isBroadcastLabel) || '';
       const endLabel = subInfoTexts.find(isEndLabel) || '';
-
       const episodeId = extractEpisodeIdFromHref(href);
 
       return {
@@ -136,7 +165,9 @@ async function captureEpisodesForProgram(page, program) {
         episode_title: normalizeText(episode.title),
         episode_url: toAbsoluteUrl(href),
         broadcast_label: broadcastLabel,
+        broadcast_date: parseBroadcastDate(broadcastLabel),
         end_label: endLabel,
+        end_flag: false,
         series_url: program.url,
         members: program.members || '',
         memberFlags: program.memberFlags || {},
@@ -152,7 +183,7 @@ async function captureEpisodesForProgram(page, program) {
     });
 }
 
-async function postEpisodesToGas(episodes) {
+async function postEpisodesToGas(episodes, crawledSeriesUrls) {
   const response = await fetch(GAS_WEB_APP_URL, {
     method: 'POST',
     headers: {
@@ -162,6 +193,7 @@ async function postEpisodesToGas(episodes) {
       token: GAS_WEB_APP_TOKEN,
       action: 'upsertEpisodes',
       episodes,
+      crawledSeriesUrls,
     }),
   });
 
@@ -202,6 +234,7 @@ async function main() {
   const page = await browser.newPage();
 
   const allEpisodes = [];
+  const crawledSeriesUrls = [];
 
   for (const program of programs) {
     try {
@@ -212,6 +245,7 @@ async function main() {
       console.log(`  episodes: ${episodes.length}`);
 
       allEpisodes.push(...episodes);
+      crawledSeriesUrls.push(program.url);
 
     } catch (error) {
       console.error(`Failed: ${program.title} / ${program.url}`);
@@ -223,16 +257,14 @@ async function main() {
 
   console.log(JSON.stringify(allEpisodes, null, 2));
 
-  if (allEpisodes.length === 0) {
-    console.log('No episodes found');
-    return;
-  }
+  const uniqueCrawledSeriesUrls = Array.from(new Set(crawledSeriesUrls));
 
-  const result = await postEpisodesToGas(allEpisodes);
+  const result = await postEpisodesToGas(allEpisodes, uniqueCrawledSeriesUrls);
 
   console.log(`Total: ${result.total}`);
   console.log(`Appended: ${result.appended}`);
   console.log(`Updated: ${result.updated}`);
+  console.log(`Ended: ${result.ended}`);
 }
 
 main().catch((error) => {
