@@ -34,6 +34,11 @@ function extractEpisodeIdFromHref(href) {
   return match ? match[1] : '';
 }
 
+function extractProgramIdFromUrl(url) {
+  const match = String(url || '').match(/\/series\/([^/?#]+)/);
+  return match ? match[1] : '';
+}
+
 function isBroadcastLabel(text) {
   return /\d{1,2}\s*月\s*\d{1,2}\s*日(?:\(.+?\))?\s*放送分/.test(text);
 }
@@ -55,9 +60,173 @@ function pad2(value) {
   return String(value).padStart(2, '0');
 }
 
-function parseBroadcastDate(broadcastLabel) {
+function parseBroadcastDateParts(broadcastLabel) {
   const text = normalizeText(broadcastLabel);
-  const match = text.match(/(?:(\d{4})年)?(\d{1,2})月(\d{1,2})日/);
+  const match = text.match(/(?:(\d{4})年)?\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日/);
+
+  if (!match) {
+    return null;
+  }
+
+  const year = match[1] ? Number(match[1]) : getCurrentYearInJst();
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+
+  if (
+    !Number.isInteger(year) ||
+    !Number.isInteger(month) ||
+    !Number.isInteger(day) ||
+    month < 1 ||
+    month > 12 ||
+    day < 1 ||
+    day > 31
+  ) {
+    return null;
+  }
+
+  return {
+    year,
+    month,
+    day,
+  };
+}
+
+/**
+ * program_master.time を読む。
+ *
+ * 対応例:
+ * - 21:58
+ * - 25:05
+ * - 28:00
+ * - 21：58
+ */
+function parseProgramTime(timeText) {
+  const text = normalizeText(timeText).replace('：', ':');
+  const match = text.match(/^(\d{1,2})\s*:\s*(\d{2})$/);
+
+  if (!match) {
+    return null;
+  }
+
+  const hour = Number(match[1]);
+  const minute = Number(match[2]);
+
+  if (
+    !Number.isInteger(hour) ||
+    !Number.isInteger(minute) ||
+    hour < 0 ||
+    hour > 47 ||
+    minute < 0 ||
+    minute > 59
+  ) {
+    return null;
+  }
+
+  return {
+    hour,
+    minute,
+  };
+}
+
+/**
+ * broadcast_label の年月日 + program_master.time から start_at を作る。
+ *
+ * 28時間制:
+ * - 24:00 以上は翌日に送る
+ * - 28:00 => 翌日04:00
+ */
+function buildStartAt(broadcastLabel, programTime) {
+  const dateParts = parseBroadcastDateParts(broadcastLabel);
+  const timeParts = parseProgramTime(programTime);
+
+  if (!dateParts || !timeParts) {
+    return '';
+  }
+
+  const date = new Date(Date.UTC(
+    dateParts.year,
+    dateParts.month - 1,
+    dateParts.day,
+    0,
+    0,
+    0
+  ));
+
+  const dayOffset = Math.floor(timeParts.hour / 24);
+  const normalizedHour = timeParts.hour % 24;
+
+  date.setUTCDate(date.getUTCDate() + dayOffset);
+
+  const year = date.getUTCFullYear();
+  const month = date.getUTCMonth() + 1;
+  const day = date.getUTCDate();
+
+  return `${year}-${pad2(month)}-${pad2(day)} ${pad2(normalizedHour)}:${pad2(timeParts.minute)}`;
+}
+
+/**
+ * start_at の表示用テキストを作る。
+ *
+ * 0:00〜4:59 は前日の日付で表示する。
+ * 曜日は日付計算ではなく program_master.week を使う。
+ *
+ * 例:
+ * start_at = 2026-05-16 01:00
+ * week = 金
+ * => 5月15日(金) 1:00 放送
+ */
+function buildStartAtText(startAt, week) {
+  const text = normalizeText(startAt);
+  const match = text.match(/^(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2})$/);
+
+  if (!match) {
+    return '';
+  }
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const hour = Number(match[4]);
+  const minute = Number(match[5]);
+
+  if (
+    !Number.isInteger(year) ||
+    !Number.isInteger(month) ||
+    !Number.isInteger(day) ||
+    !Number.isInteger(hour) ||
+    !Number.isInteger(minute) ||
+    month < 1 ||
+    month > 12 ||
+    day < 1 ||
+    day > 31 ||
+    hour < 0 ||
+    hour > 23 ||
+    minute < 0 ||
+    minute > 59
+  ) {
+    return '';
+  }
+
+  const displayDate = new Date(Date.UTC(year, month - 1, day, 0, 0, 0));
+
+  // 深夜0時〜4時台は前日の放送日として表示する
+  if (hour >= 0 && hour < 5) {
+    displayDate.setUTCDate(displayDate.getUTCDate() - 1);
+  }
+
+  const displayMonth = displayDate.getUTCMonth() + 1;
+  const displayDay = displayDate.getUTCDate();
+  const displayHour = String(hour);
+
+  return `${displayMonth}月${displayDay}日(${week || ''}) ${displayHour}:${pad2(minute)} 放送`;
+}
+
+function parseEndAt(endLabel) {
+  const text = normalizeText(endLabel);
+
+  const match = text.match(
+    /(?:(\d{4})年)?\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日(?:\(.+?\))?\s*(\d{1,2})\s*:\s*(\d{2})/
+  );
 
   if (!match) {
     return '';
@@ -66,12 +235,28 @@ function parseBroadcastDate(broadcastLabel) {
   const year = match[1] ? Number(match[1]) : getCurrentYearInJst();
   const month = Number(match[2]);
   const day = Number(match[3]);
+  const hour = Number(match[4]);
+  const minute = Number(match[5]);
 
-  if (!year || !month || !day) {
+  if (
+    !Number.isInteger(year) ||
+    !Number.isInteger(month) ||
+    !Number.isInteger(day) ||
+    !Number.isInteger(hour) ||
+    !Number.isInteger(minute) ||
+    month < 1 ||
+    month > 12 ||
+    day < 1 ||
+    day > 31 ||
+    hour < 0 ||
+    hour > 23 ||
+    minute < 0 ||
+    minute > 59
+  ) {
     return '';
   }
 
-  return `${year}-${pad2(month)}-${pad2(day)}`;
+  return `${year}-${pad2(month)}-${pad2(day)} ${pad2(hour)}:${pad2(minute)}`;
 }
 
 async function fetchProgramsFromGas() {
@@ -128,7 +313,7 @@ async function captureEpisodesForProgram(page, program) {
       mainSeasonBlock.querySelectorAll('a[href^="/episodes/"]')
     );
 
-    return links.map((link) => {
+    return links.map((link, index) => {
       const href = link.getAttribute('href') || '';
 
       const title =
@@ -143,6 +328,7 @@ async function captureEpisodesForProgram(page, program) {
         href,
         title,
         subInfoTexts,
+        index,
       };
     });
   });
@@ -158,16 +344,22 @@ async function captureEpisodesForProgram(page, program) {
       const broadcastLabel = subInfoTexts.find(isBroadcastLabel) || '';
       const endLabel = subInfoTexts.find(isEndLabel) || '';
       const episodeId = extractEpisodeIdFromHref(href);
+      const programId = extractProgramIdFromUrl(program.url);
+      const startAt = buildStartAt(broadcastLabel, program.time);
 
       return {
         episode_id: episodeId,
+        program_id: programId,
         program_title: program.title,
         episode_title: normalizeText(episode.title),
         episode_url: toAbsoluteUrl(href),
         broadcast_label: broadcastLabel,
-        broadcast_date: parseBroadcastDate(broadcastLabel),
+        start_at: startAt,
+        start_at_text: buildStartAtText(startAt, program.week),
         end_label: endLabel,
+        end_at: parseEndAt(endLabel),
         end_flag: false,
+        new_flag: episode.index === 0,
         series_url: program.url,
         members: program.members || '',
         memberFlags: program.memberFlags || {},
@@ -176,6 +368,7 @@ async function captureEpisodesForProgram(page, program) {
     .filter((episode) => {
       return (
         episode.episode_id &&
+        episode.program_id &&
         episode.program_title &&
         episode.episode_title &&
         episode.broadcast_label
@@ -221,7 +414,7 @@ async function main() {
   const programs = await fetchProgramsFromGas();
 
   if (programs.length === 0) {
-    console.log('No programs found');
+    console.log('No active programs found');
     return;
   }
 
