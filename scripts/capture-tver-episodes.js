@@ -296,14 +296,17 @@ function buildStartAtText(startAt, week) {
 
   const displayDate = new Date(Date.UTC(year, month - 1, day, 0, 0, 0));
 
-  // 深夜0時〜4時台は前日の放送日として表示する
+  let displayHour = hour;
+
+  // 深夜0時〜4時台は「前日の日付 + 24時間表記」にする
+  // 例: 2026-05-13 01:58 => 5月12日(水) 25:58 放送
   if (hour >= 0 && hour < 5) {
     displayDate.setUTCDate(displayDate.getUTCDate() - 1);
+    displayHour = hour + 24;
   }
 
   const displayMonth = displayDate.getUTCMonth() + 1;
   const displayDay = displayDate.getUTCDate();
-  const displayHour = String(hour);
 
   return `${displayMonth}月${displayDay}日(${week || ''}) ${displayHour}:${pad2(minute)} 放送`;
 }
