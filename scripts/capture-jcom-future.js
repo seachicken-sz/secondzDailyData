@@ -20,6 +20,29 @@ const JCOM_CHANNELS = [
   '00021_0',
 ].join(',');
 
+const MEMBER_SEARCH_TARGETS = [
+  { key: 'sato', keyword: '佐藤勝利' },
+  { key: 'kikuchi', keyword: '菊池風磨' },
+  { key: 'matsushima', keyword: '松島聡' },
+  { key: 'teranishi', keyword: '寺西拓人' },
+  { key: 'hara', keyword: '原嘉孝' },
+  { key: 'hashimoto', keyword: '橋本将生' },
+  { key: 'inomata', keyword: '猪俣周杜' },
+  { key: 'shinozuka', keyword: '篠塚大輝' },
+];
+
+const MEMBER_KEYS = [
+  'all',
+  'sato',
+  'kikuchi',
+  'matsushima',
+  'teranishi',
+  'hara',
+  'hashimoto',
+  'inomata',
+  'shinozuka',
+];
+
 function requireEnv(name, value) {
   if (!value) {
     throw new Error(`${name} is not set`);
@@ -32,9 +55,6 @@ function normalizeText(value) {
     .trim();
 }
 
-/**
- * 日付・時刻パース用の正規化。
- */
 function normalizeForParse(value) {
   return String(value || '')
     .replace(/[０-９]/g, (char) => String.fromCharCode(char.charCodeAt(0) - 0xFEE0))
@@ -51,18 +71,26 @@ function normalizeTitleForCompare(value) {
   return String(value || '')
     .replace(/\s+/g, '')
     .replace(/[！-～]/g, (char) => String.fromCharCode(char.charCodeAt(0) - 0xFEE0))
+    .replace(/[【】\[\]（）()]/g, '')
     .toLowerCase();
 }
 
-function isLikelyTargetProgram(foundTitle, programTitle) {
+function requireKnownProgramMatch(foundTitle, programs) {
   const found = normalizeTitleForCompare(foundTitle);
-  const target = normalizeTitleForCompare(programTitle);
 
-  if (!found || !target) {
-    return false;
+  if (!found) {
+    return null;
   }
 
-  return found.includes(target) || target.includes(found);
+  return programs.find((program) => {
+    const title = normalizeTitleForCompare(program.title);
+
+    if (!title) {
+      return false;
+    }
+
+    return found.includes(title) || title.includes(found);
+  }) || null;
 }
 
 function getCurrentYearInJst() {
@@ -114,7 +142,6 @@ function buildJcomSearchUrl(keyword) {
 
 function parseJcomDay(dayText) {
   const text = normalizeForParse(dayText);
-
   const match = text.match(/(\d{1,2})\s*\/\s*(\d{1,2})/);
 
   if (!match) {
@@ -259,7 +286,6 @@ function buildJcomEndAt(dayText, timeText) {
 
   let endHour = timeParts.endHour;
 
-  // 21:58～00:30 のような日跨ぎ対策
   if (endHour < timeParts.startHour) {
     endHour += 24;
   }
@@ -269,6 +295,55 @@ function buildJcomEndAt(dayText, timeText) {
     endHour,
     timeParts.endMinute
   );
+}
+
+function createEmptyMemberFlags() {
+  return MEMBER_KEYS.reduce((flags, key) => {
+    flags[key] = false;
+    return flags;
+  }, {});
+}
+
+function applyAllMemberFlags(memberFlags) {
+  MEMBER_KEYS.forEach((key) => {
+    memberFlags[key] = true;
+  });
+}
+
+function buildMembersText(memberFlags) {
+  if (memberFlags.all) {
+    return 'all';
+  }
+
+  return MEMBER_SEARCH_TARGETS
+    .filter((member) => memberFlags[member.key])
+    .map((member) => member.key)
+    .join('、');
+}
+
+function toBoolean(value) {
+  if (value === true) {
+    return true;
+  }
+
+  const text = String(value || '').trim().toUpperCase();
+
+  return text === 'TRUE' || text === '1' || text === 'YES';
+}
+
+function createFutureKey(future) {
+  const futureUrl = String(future.future_url || '').trim();
+
+  if (futureUrl) {
+    return futureUrl;
+  }
+
+  return [
+    future.program_id || '',
+    future.start_at || '',
+    future.future_title || '',
+    future.channel || '',
+  ].join('__');
 }
 
 async function fetchProgramsFromGas() {
@@ -292,13 +367,19 @@ async function fetchProgramsFromGas() {
     throw new Error(`GAS error: ${JSON.stringify(result)}`);
   }
 
-  return Array.isArray(result.programs) ? result.programs : [];
+  const programs = Array.isArray(result.programs) ? result.programs : [];
+
+  return programs.map((program) => ({
+    ...program,
+    program_id: extractProgramIdFromUrl(program.url),
+    all_flag: Boolean(program.memberFlags?.all) || toBoolean(program.all),
+  }));
 }
 
-async function captureFutureProgramsForProgram(page, program) {
-  const searchUrl = buildJcomSearchUrl(program.title);
+async function captureRawJcomItemsByMember(page, member) {
+  const searchUrl = buildJcomSearchUrl(member.keyword);
 
-  console.log(`J:COM Search: ${program.title} / ${searchUrl}`);
+  console.log(`J:COM Search: ${member.keyword} / ${searchUrl}`);
 
   await page.goto(searchUrl, {
     waitUntil: 'networkidle',
@@ -307,7 +388,7 @@ async function captureFutureProgramsForProgram(page, program) {
 
   await page.waitForTimeout(1500);
 
-  const rawItems = await page.evaluate(() => {
+  return page.evaluate(() => {
     const items = Array.from(
       document.querySelectorAll('#program_list .list_item.program_list:not(.api-base)')
     );
@@ -328,55 +409,129 @@ async function captureFutureProgramsForProgram(page, program) {
       };
     });
   });
+}
 
-  const programId = extractProgramIdFromUrl(program.url);
+function convertRawItemToFuture(rawItem, program, memberKey) {
+  const futureTitle = normalizeText(rawItem.title);
+  const dayText = normalizeText(rawItem.day);
+  const timeText = normalizeText(rawItem.time);
+  const channel = normalizeText(rawItem.channel);
 
-  return rawItems
-    .map((item) => {
-      const futureTitle = normalizeText(item.title);
-      const dayText = normalizeText(item.day);
-      const timeText = normalizeText(item.time);
-      const channel = normalizeText(item.channel);
+  const startAt = buildJcomStartAt(dayText, timeText);
+  const endAt = buildJcomEndAt(dayText, timeText);
+  const futureUrl = toJcomAbsoluteUrl(rawItem.href);
+  const broadcastText = `${dayText} ${timeText}`.trim();
 
-      const startAt = buildJcomStartAt(dayText, timeText);
-      const endAt = buildJcomEndAt(dayText, timeText);
-      const futureUrl = toJcomAbsoluteUrl(item.href);
-      const broadcastText = `${dayText} ${timeText}`.trim();
+  const memberFlags = createEmptyMemberFlags();
 
-      return {
-        program_id: programId,
-        program_title: program.title,
-        future_title: futureTitle,
-        future_url: futureUrl,
-        broadcast_text: broadcastText,
-        start_at: startAt,
-        end_at: endAt,
-        channel,
-        future_flag: true,
-        series_url: program.url,
-        members: program.members || '',
-        memberFlags: program.memberFlags || {},
-      };
-    })
-    .filter((item) => {
-      const isTarget = isLikelyTargetProgram(item.future_title, program.title);
+  if (program.all_flag) {
+    applyAllMemberFlags(memberFlags);
+  } else if (memberKey) {
+    memberFlags[memberKey] = true;
+  }
 
-      if (!isTarget) {
-        console.log({
-          reason: 'J:COM item skipped by title filter',
-          program: program.title,
-          foundTitle: item.future_title,
-        });
-      }
+  return {
+    program_id: program.program_id,
+    program_title: program.title,
+    future_title: futureTitle,
+    future_url: futureUrl,
+    broadcast_text: broadcastText,
+    start_at: startAt,
+    end_at: endAt,
+    channel,
+    future_flag: true,
+    series_url: program.url,
+    members: buildMembersText(memberFlags),
+    memberFlags,
+  };
+}
 
-      return (
-        item.program_id &&
-        item.program_title &&
-        item.future_title &&
-        item.start_at &&
-        isTarget
-      );
-    });
+function mergeFuture(base, incoming) {
+  const mergedFlags = {
+    ...createEmptyMemberFlags(),
+    ...(base.memberFlags || {}),
+  };
+
+  Object.entries(incoming.memberFlags || {}).forEach(([key, value]) => {
+    if (value) {
+      mergedFlags[key] = true;
+    }
+  });
+
+  if (mergedFlags.all) {
+    applyAllMemberFlags(mergedFlags);
+  }
+
+  return {
+    ...base,
+    memberFlags: mergedFlags,
+    members: buildMembersText(mergedFlags),
+  };
+}
+
+async function captureFuturePrograms(page, programs) {
+  const futureByKey = new Map();
+  const crawledProgramIds = new Set();
+
+  for (const member of MEMBER_SEARCH_TARGETS) {
+    try {
+      const rawItems = await captureRawJcomItemsByMember(page, member);
+
+      console.log(`  ${member.keyword}: ${rawItems.length}`);
+
+      rawItems.forEach((rawItem) => {
+        const futureTitle = normalizeText(rawItem.title);
+        const matchedProgram = requireKnownProgramMatch(futureTitle, programs);
+
+        if (!matchedProgram) {
+          console.log({
+            reason: 'J:COM item skipped by program_master title filter',
+            member: member.key,
+            keyword: member.keyword,
+            foundTitle: futureTitle,
+          });
+          return;
+        }
+
+        const future = convertRawItemToFuture(rawItem, matchedProgram, member.key);
+
+        if (!future.program_id || !future.future_title || !future.start_at) {
+          console.log({
+            reason: 'J:COM item skipped by required fields',
+            member: member.key,
+            keyword: member.keyword,
+            future,
+          });
+          return;
+        }
+
+        const key = createFutureKey(future);
+
+        if (!key) {
+          return;
+        }
+
+        crawledProgramIds.add(future.program_id);
+
+        const existing = futureByKey.get(key);
+
+        if (existing) {
+          futureByKey.set(key, mergeFuture(existing, future));
+        } else {
+          futureByKey.set(key, future);
+        }
+      });
+
+    } catch (error) {
+      console.error(`Failed J:COM member search: ${member.keyword}`);
+      console.error(error);
+    }
+  }
+
+  return {
+    futures: Array.from(futureByKey.values()),
+    crawledProgramIds: Array.from(crawledProgramIds),
+  };
 }
 
 async function postFutureProgramsToGas(futures, crawledProgramIds) {
@@ -421,7 +576,7 @@ async function main() {
     return;
   }
 
-  console.log(`Programs: ${programs.length}`);
+  console.log(`Active programs: ${programs.length}`);
 
   const browser = await chromium.launch({
     headless: true,
@@ -429,37 +584,13 @@ async function main() {
 
   const page = await browser.newPage();
 
-  const allFutures = [];
-  const crawledProgramIds = [];
-
-  for (const program of programs) {
-    try {
-      console.log(`Capture J:COM future: ${program.title}`);
-
-      const futures = await captureFutureProgramsForProgram(page, program);
-      const programId = extractProgramIdFromUrl(program.url);
-
-      console.log(`  futures: ${futures.length}`);
-
-      allFutures.push(...futures);
-
-      if (programId) {
-        crawledProgramIds.push(programId);
-      }
-
-    } catch (error) {
-      console.error(`Failed J:COM future: ${program.title}`);
-      console.error(error);
-    }
-  }
+  const { futures, crawledProgramIds } = await captureFuturePrograms(page, programs);
 
   await browser.close();
 
-  console.log(JSON.stringify(allFutures, null, 2));
+  console.log(JSON.stringify(futures, null, 2));
 
-  const uniqueCrawledProgramIds = Array.from(new Set(crawledProgramIds));
-
-  const result = await postFutureProgramsToGas(allFutures, uniqueCrawledProgramIds);
+  const result = await postFutureProgramsToGas(futures, crawledProgramIds);
 
   console.log(`Total: ${result.total}`);
   console.log(`Appended: ${result.appended}`);
