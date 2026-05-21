@@ -21,6 +21,7 @@ const JCOM_CHANNELS = [
 ].join(',');
 
 const MEMBER_SEARCH_TARGETS = [
+  { key: 'all', keyword: 'timelesz', forceAll: true },
   { key: 'sato', keyword: '佐藤勝利' },
   { key: 'kikuchi', keyword: '菊池風磨' },
   { key: 'matsushima', keyword: '松島聡' },
@@ -316,6 +317,7 @@ function buildMembersText(memberFlags) {
   }
 
   return MEMBER_SEARCH_TARGETS
+    .filter((member) => member.key !== 'all')
     .filter((member) => memberFlags[member.key])
     .map((member) => member.key)
     .join('、');
@@ -411,7 +413,7 @@ async function captureRawJcomItemsByMember(page, member) {
   });
 }
 
-function convertRawItemToFuture(rawItem, program, memberKey) {
+function convertRawItemToFuture(rawItem, program, searchTarget) {
   const futureTitle = normalizeText(rawItem.title);
   const dayText = normalizeText(rawItem.day);
   const timeText = normalizeText(rawItem.time);
@@ -424,10 +426,10 @@ function convertRawItemToFuture(rawItem, program, memberKey) {
 
   const memberFlags = createEmptyMemberFlags();
 
-  if (program.all_flag) {
+  if (program.all_flag || searchTarget.forceAll) {
     applyAllMemberFlags(memberFlags);
-  } else if (memberKey) {
-    memberFlags[memberKey] = true;
+  } else if (searchTarget.key) {
+    memberFlags[searchTarget.key] = true;
   }
 
   return {
@@ -493,7 +495,7 @@ async function captureFuturePrograms(page, programs) {
           return;
         }
 
-        const future = convertRawItemToFuture(rawItem, matchedProgram, member.key);
+        const future = convertRawItemToFuture(rawItem, matchedProgram, member);
 
         if (!future.program_id || !future.future_title || !future.start_at) {
           console.log({
