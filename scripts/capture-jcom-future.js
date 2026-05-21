@@ -20,8 +20,12 @@ const JCOM_CHANNELS = [
   '00021_0',
 ].join(',');
 
+const TIMELESZ_SEARCH_TARGET = {
+  key: 'timelesz',
+  keyword: 'timelesz',
+};
+
 const MEMBER_SEARCH_TARGETS = [
-  { key: 'all', keyword: 'timelesz', forceAll: true },
   { key: 'sato', keyword: '佐藤勝利' },
   { key: 'kikuchi', keyword: '菊池風磨' },
   { key: 'matsushima', keyword: '松島聡' },
@@ -76,7 +80,7 @@ function normalizeTitleForCompare(value) {
     .toLowerCase();
 }
 
-function requireKnownProgramMatch(foundTitle, programs) {
+function findMatchedProgram(foundTitle, programs) {
   const found = normalizeTitleForCompare(foundTitle);
 
   if (!found) {
@@ -317,7 +321,6 @@ function buildMembersText(memberFlags) {
   }
 
   return MEMBER_SEARCH_TARGETS
-    .filter((member) => member.key !== 'all')
     .filter((member) => memberFlags[member.key])
     .map((member) => member.key)
     .join('、');
@@ -348,6 +351,67 @@ function createFutureKey(future) {
   ].join('__');
 }
 
+function createFutureBase(rawItem, program) {
+  const futureTitle = normalizeText(rawItem.title);
+  const dayText = normalizeText(rawItem.day);
+  const timeText = normalizeText(rawItem.time);
+  const channel = normalizeText(rawItem.channel);
+
+  const startAt = buildJcomStartAt(dayText, timeText);
+  const endAt = buildJcomEndAt(dayText, timeText);
+  const futureUrl = toJcomAbsoluteUrl(rawItem.href);
+  const broadcastText = `${dayText} ${timeText}`.trim();
+
+  return {
+    program_id: program.program_id,
+    program_title: program.title,
+    future_title: futureTitle,
+    future_url: futureUrl,
+    broadcast_text: broadcastText,
+    start_at: startAt,
+    end_at: endAt,
+    channel,
+    future_flag: true,
+    series_url: program.url,
+  };
+}
+
+function finalizeMemberFlags(program, matchedMemberKeys, hitByTimelesz) {
+  const memberFlags = createEmptyMemberFlags();
+
+  const individualHitCount = matchedMemberKeys.size;
+  const isProgramMasterAll = Boolean(program.all_flag);
+  const isAllIndividualMembersHit = individualHitCount === MEMBER_SEARCH_TARGETS.length;
+  const isTimeleszOnlyHit = Boolean(hitByTimelesz) && individualHitCount === 0;
+
+  if (isProgramMasterAll || isAllIndividualMembersHit || isTimeleszOnlyHit) {
+    applyAllMemberFlags(memberFlags);
+    return memberFlags;
+  }
+
+  matchedMemberKeys.forEach((memberKey) => {
+    if (memberFlags[memberKey] !== undefined) {
+      memberFlags[memberKey] = true;
+    }
+  });
+
+  return memberFlags;
+}
+
+function finalizeFutureEntry(entry) {
+  const memberFlags = finalizeMemberFlags(
+    entry.program,
+    entry.matchedMemberKeys,
+    entry.hitByTimelesz
+  );
+
+  return {
+    ...entry.future,
+    memberFlags,
+    members: buildMembersText(memberFlags),
+  };
+}
+
 async function fetchProgramsFromGas() {
   const url = new URL(GAS_WEB_APP_URL);
 
@@ -371,17 +435,19 @@ async function fetchProgramsFromGas() {
 
   const programs = Array.isArray(result.programs) ? result.programs : [];
 
-  return programs.map((program) => ({
-    ...program,
-    program_id: extractProgramIdFromUrl(program.url),
-    all_flag: Boolean(program.memberFlags?.all) || toBoolean(program.all),
-  }));
+  return programs
+    .map((program) => ({
+      ...program,
+      program_id: extractProgramIdFromUrl(program.url),
+      all_flag: Boolean(program.memberFlags?.all) || toBoolean(program.all),
+    }))
+    .filter((program) => program.program_id && program.title && program.url);
 }
 
-async function captureRawJcomItemsByMember(page, member) {
-  const searchUrl = buildJcomSearchUrl(member.keyword);
+async function captureRawJcomItems(page, keyword) {
+  const searchUrl = buildJcomSearchUrl(keyword);
 
-  console.log(`J:COM Search: ${member.keyword} / ${searchUrl}`);
+  console.log(`J:COM Search: ${keyword} / ${searchUrl}`);
 
   await page.goto(searchUrl, {
     waitUntil: 'networkidle',
@@ -413,115 +479,118 @@ async function captureRawJcomItemsByMember(page, member) {
   });
 }
 
-function convertRawItemToFuture(rawItem, program, searchTarget) {
-  const futureTitle = normalizeText(rawItem.title);
-  const dayText = normalizeText(rawItem.day);
-  const timeText = normalizeText(rawItem.time);
-  const channel = normalizeText(rawItem.channel);
+function addRawItemsToFutureMap({
+  rawItems,
+  programs,
+  futureByKey,
+  crawledProgramIds,
+  sourceType,
+  memberKey = '',
+  keyword = '',
+}) {
+  rawItems.forEach((rawItem) => {
+    const futureTitle = normalizeText(rawItem.title);
+    const matchedProgram = findMatchedProgram(futureTitle, programs);
 
-  const startAt = buildJcomStartAt(dayText, timeText);
-  const endAt = buildJcomEndAt(dayText, timeText);
-  const futureUrl = toJcomAbsoluteUrl(rawItem.href);
-  const broadcastText = `${dayText} ${timeText}`.trim();
-
-  const memberFlags = createEmptyMemberFlags();
-
-  if (program.all_flag || searchTarget.forceAll) {
-    applyAllMemberFlags(memberFlags);
-  } else if (searchTarget.key) {
-    memberFlags[searchTarget.key] = true;
-  }
-
-  return {
-    program_id: program.program_id,
-    program_title: program.title,
-    future_title: futureTitle,
-    future_url: futureUrl,
-    broadcast_text: broadcastText,
-    start_at: startAt,
-    end_at: endAt,
-    channel,
-    future_flag: true,
-    series_url: program.url,
-    members: buildMembersText(memberFlags),
-    memberFlags,
-  };
-}
-
-function mergeFuture(base, incoming) {
-  const mergedFlags = {
-    ...createEmptyMemberFlags(),
-    ...(base.memberFlags || {}),
-  };
-
-  Object.entries(incoming.memberFlags || {}).forEach(([key, value]) => {
-    if (value) {
-      mergedFlags[key] = true;
+    if (!matchedProgram) {
+      console.log({
+        reason: 'J:COM item skipped by program_master title filter',
+        sourceType,
+        memberKey,
+        keyword,
+        foundTitle: futureTitle,
+      });
+      return;
     }
+
+    const future = createFutureBase(rawItem, matchedProgram);
+
+    if (!future.program_id || !future.future_title || !future.start_at) {
+      console.log({
+        reason: 'J:COM item skipped by required fields',
+        sourceType,
+        memberKey,
+        keyword,
+        future,
+      });
+      return;
+    }
+
+    const key = createFutureKey(future);
+
+    if (!key) {
+      return;
+    }
+
+    crawledProgramIds.add(future.program_id);
+
+    const existing = futureByKey.get(key);
+
+    if (existing) {
+      if (sourceType === 'timelesz') {
+        existing.hitByTimelesz = true;
+      }
+
+      if (sourceType === 'member' && memberKey) {
+        existing.matchedMemberKeys.add(memberKey);
+      }
+
+      futureByKey.set(key, existing);
+      return;
+    }
+
+    const entry = {
+      future,
+      program: matchedProgram,
+      matchedMemberKeys: new Set(),
+      hitByTimelesz: sourceType === 'timelesz',
+    };
+
+    if (sourceType === 'member' && memberKey) {
+      entry.matchedMemberKeys.add(memberKey);
+    }
+
+    futureByKey.set(key, entry);
   });
-
-  if (mergedFlags.all) {
-    applyAllMemberFlags(mergedFlags);
-  }
-
-  return {
-    ...base,
-    memberFlags: mergedFlags,
-    members: buildMembersText(mergedFlags),
-  };
 }
 
 async function captureFuturePrograms(page, programs) {
   const futureByKey = new Map();
   const crawledProgramIds = new Set();
 
+  try {
+    const rawItems = await captureRawJcomItems(page, TIMELESZ_SEARCH_TARGET.keyword);
+
+    console.log(`  ${TIMELESZ_SEARCH_TARGET.keyword}: ${rawItems.length}`);
+
+    addRawItemsToFutureMap({
+      rawItems,
+      programs,
+      futureByKey,
+      crawledProgramIds,
+      sourceType: 'timelesz',
+      keyword: TIMELESZ_SEARCH_TARGET.keyword,
+    });
+
+  } catch (error) {
+    console.error(`Failed J:COM timelesz search: ${TIMELESZ_SEARCH_TARGET.keyword}`);
+    console.error(error);
+  }
+
   for (const member of MEMBER_SEARCH_TARGETS) {
     try {
-      const rawItems = await captureRawJcomItemsByMember(page, member);
+      const rawItems = await captureRawJcomItems(page, member.keyword);
 
       console.log(`  ${member.keyword}: ${rawItems.length}`);
 
-      rawItems.forEach((rawItem) => {
-        const futureTitle = normalizeText(rawItem.title);
-        const matchedProgram = requireKnownProgramMatch(futureTitle, programs);
-
-        if (!matchedProgram) {
-          console.log({
-            reason: 'J:COM item skipped by program_master title filter',
-            member: member.key,
-            keyword: member.keyword,
-            foundTitle: futureTitle,
-          });
-          return;
-        }
-
-        const future = convertRawItemToFuture(rawItem, matchedProgram, member);
-
-        if (!future.program_id || !future.future_title || !future.start_at) {
-          console.log({
-            reason: 'J:COM item skipped by required fields',
-            member: member.key,
-            keyword: member.keyword,
-            future,
-          });
-          return;
-        }
-
-        const key = createFutureKey(future);
-
-        if (!key) {
-          return;
-        }
-
-        crawledProgramIds.add(future.program_id);
-
-        const existing = futureByKey.get(key);
-
-        if (existing) {
-          futureByKey.set(key, mergeFuture(existing, future));
-        } else {
-          futureByKey.set(key, future);
-        }
+      addRawItemsToFutureMap({
+        rawItems,
+        programs,
+        futureByKey,
+        crawledProgramIds,
+        sourceType: 'member',
+        memberKey: member.key,
+        keyword: member.keyword,
       });
 
     } catch (error) {
@@ -530,8 +599,10 @@ async function captureFuturePrograms(page, programs) {
     }
   }
 
+  const futures = Array.from(futureByKey.values()).map(finalizeFutureEntry);
+
   return {
-    futures: Array.from(futureByKey.values()),
+    futures,
     crawledProgramIds: Array.from(crawledProgramIds),
   };
 }
