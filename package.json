@@ -1,6 +1,7 @@
 {
   "scripts": {
-    "capture:tver-episodes": "node scripts/capture-tver-episodes.js"
+    "capture:tver-episodes": "node scripts/capture-tver-episodes.js",
+    "capture:jcom-future": "node scripts/capture-jcom-future.js"
   },
   "dependencies": {
     "playwright": "^1.52.0"
