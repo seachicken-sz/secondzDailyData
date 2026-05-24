@@ -84,10 +84,19 @@ function pad2(value) {
   return String(value).padStart(2, '0');
 }
 
+function getJapaneseWeekdayFromDateParts(year, month, day) {
+  const date = new Date(Date.UTC(year, month - 1, day, 0, 0, 0));
+  const weekdays = ['日', '月', '火', '水', '木', '金', '土'];
+  return weekdays[date.getUTCDay()];
+}
+
+/**
+ * TVerの「5月21日(木)放送分」から、論理放送日を取得する。
+ */
 function parseBroadcastDateParts(broadcastLabel) {
   const text = normalizeForParse(broadcastLabel);
 
-  const match = text.match(/(?:(\d{4})年)?\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日/);
+  const match = text.match(/(?:(\d{4})年)?\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日(?:\((.+?)\))?/);
 
   if (!match) {
     console.log({
@@ -101,6 +110,7 @@ function parseBroadcastDateParts(broadcastLabel) {
   const year = match[1] ? Number(match[1]) : getCurrentYearInJst();
   const month = Number(match[2]);
   const day = Number(match[3]);
+  const weekday = match[4] ? String(match[4]).trim() : '';
 
   if (
     !Number.isInteger(year) ||
@@ -118,6 +128,7 @@ function parseBroadcastDateParts(broadcastLabel) {
       year,
       month,
       day,
+      weekday,
     });
     return null;
   }
@@ -126,25 +137,31 @@ function parseBroadcastDateParts(broadcastLabel) {
     year,
     month,
     day,
+    weekday,
   };
 }
 
 /**
  * program_master.time を読む。
  *
+ * 今回の前提:
+ * - 深夜番組は元シート側で 24:15 / 25:58 のように28時間制で持つ
+ * - Node.js側で 0:15 を勝手に 24:15 に変換しない
+ *
  * 対応例:
+ * - 0:15
  * - 1:00
  * - 01:00
  * - 14:00
  * - 14:00:00
- * - 25:05
+ * - 24:15
+ * - 25:58
  * - 28:00:00
  * - Sat Dec 30 1899 11:56:00 GMT+0900 (Japan Standard Time)
  */
 function parseProgramTime(timeText) {
   const text = normalizeForParse(timeText);
 
-  // 通常の時刻文字列。
   let match = text.match(/^(\d{1,2})\s*:\s*(\d{2})(?::\d{2})?$/);
 
   // Google Sheetsの時刻がDate文字列として渡った場合の救済。
@@ -189,6 +206,74 @@ function parseProgramTime(timeText) {
 }
 
 /**
+ * TVerの「〇月〇日(曜)放送分」を論理放送日として、
+ * program_master.time を28時間制の表示時刻として扱う。
+ *
+ * 例:
+ * broadcastLabel = 5月21日(木)放送分
+ * programTime = 24:15
+ *
+ * => start_at_text = 5月21日(木) 24:15 放送
+ * => start_at = 2026-05-22 0:15
+ *
+ * programTime = 0:15 の場合は、
+ * => start_at_text = 5月21日(木) 0:15 放送
+ * => start_at = 2026-05-21 0:15
+ *
+ * つまり、深夜番組を24時台扱いしたい場合は、元シート側で 24:15 と入れる。
+ */
+function buildBroadcastDateTimeParts(broadcastLabel, programTime) {
+  const dateParts = parseBroadcastDateParts(broadcastLabel);
+  const timeParts = parseProgramTime(programTime);
+
+  if (!dateParts || !timeParts) {
+    console.log({
+      reason: 'buildBroadcastDateTimeParts failed',
+      broadcastLabel,
+      programTime,
+      dateParts,
+      timeParts,
+    });
+    return null;
+  }
+
+  const displayHour = timeParts.hour;
+  const actualDayOffset = Math.floor(displayHour / 24);
+  const actualHour = displayHour % 24;
+
+  const actualDate = new Date(Date.UTC(
+    dateParts.year,
+    dateParts.month - 1,
+    dateParts.day,
+    actualHour,
+    timeParts.minute,
+    0
+  ));
+
+  actualDate.setUTCDate(actualDate.getUTCDate() + actualDayOffset);
+
+  const actualYear = actualDate.getUTCFullYear();
+  const actualMonth = actualDate.getUTCMonth() + 1;
+  const actualDay = actualDate.getUTCDate();
+
+  const weekday = dateParts.weekday ||
+    getJapaneseWeekdayFromDateParts(dateParts.year, dateParts.month, dateParts.day);
+
+  return {
+    logicalYear: dateParts.year,
+    logicalMonth: dateParts.month,
+    logicalDay: dateParts.day,
+    weekday,
+    displayHour,
+    minute: timeParts.minute,
+    actualYear,
+    actualMonth,
+    actualDay,
+    actualHour,
+  };
+}
+
+/**
  * broadcast_label の年月日 + program_master.time から start_at を作る。
  *
  * 28時間制:
@@ -197,118 +282,28 @@ function parseProgramTime(timeText) {
  * - 28:00 => 翌日04:00
  */
 function buildStartAt(broadcastLabel, programTime) {
-  const dateParts = parseBroadcastDateParts(broadcastLabel);
-  const timeParts = parseProgramTime(programTime);
+  const parts = buildBroadcastDateTimeParts(broadcastLabel, programTime);
 
-  if (!dateParts || !timeParts) {
-    console.log({
-      reason: 'buildStartAt failed',
-      broadcastLabel,
-      programTime,
-      dateParts,
-      timeParts,
-    });
+  if (!parts) {
     return '';
   }
 
-  const date = new Date(Date.UTC(
-    dateParts.year,
-    dateParts.month - 1,
-    dateParts.day,
-    0,
-    0,
-    0
-  ));
-
-  const dayOffset = Math.floor(timeParts.hour / 24);
-  const normalizedHour = timeParts.hour % 24;
-
-  date.setUTCDate(date.getUTCDate() + dayOffset);
-
-  const year = date.getUTCFullYear();
-  const month = date.getUTCMonth() + 1;
-  const day = date.getUTCDate();
-
-  return `${year}-${pad2(month)}-${pad2(day)} ${pad2(normalizedHour)}:${pad2(timeParts.minute)}`;
+  return `${parts.actualYear}-${pad2(parts.actualMonth)}-${pad2(parts.actualDay)} ${parts.actualHour}:${pad2(parts.minute)}`;
 }
 
 /**
  * start_at の表示用テキストを作る。
  *
- * 0:00〜4:59 は前日の日付で表示する。
- * 曜日は日付計算ではなく program_master.week を使う。
- *
- * 例:
- * start_at = 2026-05-16 01:00
- * week = 金
- * => 5月15日(金) 1:00 放送
+ * start_atから逆算せず、broadcast_labelの論理放送日を正として作る。
  */
-function buildStartAtText(startAt, week) {
-  const text = normalizeForParse(startAt);
-  const match = text.match(/^(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2})$/);
+function buildStartAtText(broadcastLabel, programTime) {
+  const parts = buildBroadcastDateTimeParts(broadcastLabel, programTime);
 
-  if (!match) {
-    if (startAt) {
-      console.log({
-        reason: 'buildStartAtText failed',
-        startAt,
-        normalized: text,
-        week,
-      });
-    }
+  if (!parts) {
     return '';
   }
 
-  const year = Number(match[1]);
-  const month = Number(match[2]);
-  const day = Number(match[3]);
-  const hour = Number(match[4]);
-  const minute = Number(match[5]);
-
-  if (
-    !Number.isInteger(year) ||
-    !Number.isInteger(month) ||
-    !Number.isInteger(day) ||
-    !Number.isInteger(hour) ||
-    !Number.isInteger(minute) ||
-    month < 1 ||
-    month > 12 ||
-    day < 1 ||
-    day > 31 ||
-    hour < 0 ||
-    hour > 23 ||
-    minute < 0 ||
-    minute > 59
-  ) {
-    console.log({
-      reason: 'buildStartAtText invalid',
-      startAt,
-      normalized: text,
-      year,
-      month,
-      day,
-      hour,
-      minute,
-      week,
-    });
-    return '';
-  }
-
-  const displayDate = new Date(Date.UTC(year, month - 1, day, 0, 0, 0));
-
-  let displayHour = hour;
-
-  // 深夜0時〜4時台は「前日の日付 + 24時間表記」にする
-  // 例: 2026-05-13 01:58 => 5月12日(水) 25:58 放送
-  if (hour >= 0 && hour < 5) {
-    displayDate.setUTCDate(displayDate.getUTCDate() - 1);
-    displayHour = hour + 24;
-  }
-
-  const displayMonth = displayDate.getUTCMonth() + 1;
-  const displayDay = displayDate.getUTCDate();
-
-  return `${displayMonth}月${displayDay}日(${week || ''}) ${displayHour}:${pad2(minute)} 放送`;
+  return `${parts.logicalMonth}月${parts.logicalDay}日(${parts.weekday}) ${parts.displayHour}:${pad2(parts.minute)} 放送`;
 }
 
 function parseEndAt(endLabel) {
@@ -356,7 +351,7 @@ function parseEndAt(endLabel) {
     return '';
   }
 
-  return `${year}-${pad2(month)}-${pad2(day)} ${pad2(hour)}:${pad2(minute)}`;
+  return `${year}-${pad2(month)}-${pad2(day)} ${hour}:${pad2(minute)}`;
 }
 
 async function fetchProgramsFromGas() {
@@ -445,8 +440,9 @@ async function captureEpisodesForProgram(page, program) {
       const endLabel = subInfoTexts.find(isEndLabel) || '';
       const episodeId = extractEpisodeIdFromHref(href);
       const programId = extractProgramIdFromUrl(program.url);
+
       const startAt = buildStartAt(broadcastLabel, program.time);
-      const startAtText = buildStartAtText(startAt, program.week);
+      const startAtText = buildStartAtText(broadcastLabel, program.time);
 
       console.log({
         program: program.title,
