@@ -1,7 +1,7 @@
 const { chromium } = require('playwright');
 
 const GAS_WEB_APP_RANK_URL = process.env.GAS_WEB_APP_RANK_URL;
-const GAS_TOKEN = process.env.GAS_TOKEN;
+const GAS_WEB_APP_TOKEN = process.env.GAS_WEB_APP_TOKEN;
 
 const TVER_BASE_URL = 'https://tver.jp';
 
@@ -254,13 +254,13 @@ async function postToGas(target, items, capturedAt) {
     throw new Error('GAS_WEB_APP_RANK_URL が未設定です');
   }
 
-  if (!GAS_TOKEN) {
-    throw new Error('GAS_TOKEN が未設定です');
+  if (!GAS_WEB_APP_TOKEN) {
+    throw new Error('GAS_WEB_APP_TOKEN が未設定です');
   }
 
   const payload = {
     type: 'tverRanking',
-    token: GAS_TOKEN,
+    token: GAS_WEB_APP_TOKEN,
     rankingType: target.type,
     sheetName: target.sheetName,
     capturedAt,
