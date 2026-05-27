@@ -31,7 +31,7 @@ jobs:
       - name: Capture TVer ranking
         env:
           GAS_WEB_APP_RANK_URL: ${{ secrets.GAS_WEB_APP_RANK_URL }}
-          GAS_TOKEN: ${{ secrets.GAS_TOKEN }}
+          GAS_TOKEN: ${{ secrets.GAS_WEB_APP_TOKEN }}
         run: |
           if [ -n "${{ github.event.inputs.rankingType }}" ]; then
             npm run capture:tver-ranking -- --type=${{ github.event.inputs.rankingType }}
