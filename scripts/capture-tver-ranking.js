@@ -1,6 +1,6 @@
 const { chromium } = require('playwright');
 
-const GAS_WEB_APP_URL = process.env.GAS_WEB_APP_URL;
+const GAS_WEB_APP_RANK_URL = process.env.GAS_WEB_APP_RANK_URL;
 const GAS_TOKEN = process.env.GAS_TOKEN;
 
 const TVER_BASE_URL = 'https://tver.jp';
@@ -197,8 +197,8 @@ async function captureRankingTarget(page, target, capturedAt) {
 }
 
 async function postToGas(target, items, capturedAt) {
-  if (!GAS_WEB_APP_URL) {
-    throw new Error('GAS_WEB_APP_URL が未設定です');
+  if (!GAS_WEB_APP_RANK_URL) {
+    throw new Error('GAS_WEB_APP_RANK_URL が未設定です');
   }
 
   if (!GAS_TOKEN) {
@@ -214,7 +214,7 @@ async function postToGas(target, items, capturedAt) {
     items,
   };
 
-  const res = await fetch(GAS_WEB_APP_URL, {
+  const res = await fetch(GAS_WEB_APP_RANK_URL, {
     method: 'POST',
     headers: {
       'Content-Type': 'text/plain;charset=utf-8',
