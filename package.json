@@ -2,7 +2,8 @@
   "scripts": {
     "capture:tver-episodes": "node scripts/capture-tver-episodes.js",
     "capture:jcom-future": "node scripts/capture-jcom-future.js",
-    "capture:tver-ranking": "node scripts/capture-tver-ranking.js"
+    "capture:tver-ranking": "node scripts/capture-tver-ranking.js",
+     "capture:tver-engagement": "node scripts/capture-tver-engagement.js"
   },
   "dependencies": {
     "playwright": "^1.52.0"
