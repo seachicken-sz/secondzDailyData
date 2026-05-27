@@ -128,45 +128,44 @@ async function captureRankingTarget(page, target, capturedAt) {
 
   await autoScroll(page, 50);
 
-  const rows = await page.$$eval(
-    'a[href^="/episodes/"]',
-    (anchors) => {
-      const getText = (root, selector) => {
-        const el = root.querySelector(selector);
-        return el ? el.textContent.trim().replace(/\s+/g, ' ') : '';
+const rows = await page.$$eval(
+  'a[href^="/episodes/"]',
+  (anchors) => {
+    const getText = (root, selector) => {
+      const el = root.querySelector(selector);
+      return el ? el.textContent.trim().replace(/\s+/g, ' ') : '';
+    };
+
+    const getAllText = (root, selector) => {
+      return Array.from(root.querySelectorAll(selector)).map((el) =>
+        el.textContent.trim().replace(/\s+/g, ' ')
+      );
+    };
+
+    return anchors.slice(0, 50).map((a, index) => {
+      const href = a.getAttribute('href') || '';
+
+      const rankImg =
+        a.querySelector('img[class*="EpisodeListItem_ranking"]') ||
+        a.querySelector('img[alt$="位"]');
+
+      const rankAlt = rankImg ? rankImg.getAttribute('alt') || '' : '';
+      const rankMatch = rankAlt.match(/(\d+)位/);
+
+      const thumbnailImg = a.querySelector('img[src*="thumbnail/episode"]');
+
+      return {
+        fallbackRank: index + 1,
+        rank: rankMatch ? Number(rankMatch[1]) : index + 1,
+        program_title: getText(a, '[class*="EpisodeListItem_title"]'),
+        episode_title: getText(a, '[class*="EpisodeListItem_subTitle"]'),
+        subInfos: getAllText(a, '[class*="EpisodeListItem_subInfo"]'),
+        episodePath: href,
+        thumbnailUrl: thumbnailImg ? thumbnailImg.getAttribute('src') || '' : '',
       };
-
-      const getAllText = (root, selector) => {
-        return Array.from(root.querySelectorAll(selector)).map((el) =>
-          el.textContent.trim().replace(/\s+/g, ' ')
-        );
-      };
-
-      return anchors.slice(0, 50).map((a, index) => {
-        const href = a.getAttribute('href') || '';
-
-        const rankImg =
-          a.querySelector('img[class*="EpisodeListItem_ranking"]') ||
-          a.querySelector('img[alt$="位"]');
-
-        const rankAlt = rankImg ? rankImg.getAttribute('alt') || '' : '';
-        const rankMatch = rankAlt.match(/(\d+)位/);
-
-        const thumbnailImg = a.querySelector('img[src*="thumbnail/episode"]');
-
-        return {
-          fallbackRank: index + 1,
-          rank: rankMatch ? Number(rankMatch[1]) : index + 1,
-          program_title: getText(a, '[class*="EpisodeListItem_title"]'),
-          episode_title: getText(a, '[class*="EpisodeListItem_subTitle"]'),
-          subInfos: getAllText(a, '[class*="EpisodeListItem_subInfo"]'),
-          episodePath: href,
-          thumbnailUrl: thumbnailImg ? thumbnailImg.getAttribute('src') || '' : '',
-        };
-      });
-    }
-  );
-
+    });
+  }
+);
   const items = rows
     .map((row) => {
       const episodeId = extractEpisodeId(row.episodePath);
