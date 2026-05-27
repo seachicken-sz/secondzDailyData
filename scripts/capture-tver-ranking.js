@@ -129,43 +129,97 @@ async function captureRankingTarget(page, target, capturedAt) {
   await autoScroll(page, 50);
 
 const rows = await page.$$eval(
-  'a[href^="/episodes/"]',
+  'a[href*="/episodes/"]',
   (anchors) => {
-    const getText = (root, selector) => {
-      const el = root.querySelector(selector);
-      return el ? el.textContent.trim().replace(/\s+/g, ' ') : '';
-    };
+    const normalize = (value) =>
+      String(value || '')
+        .replace(/\u00a0/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
 
-    const getAllText = (root, selector) => {
-      return Array.from(root.querySelectorAll(selector)).map((el) =>
-        el.textContent.trim().replace(/\s+/g, ' ')
-      );
-    };
+    const uniqueAnchors = [];
+    const seen = new Set();
 
-    return anchors.slice(0, 50).map((a, index) => {
+    for (const a of anchors) {
+      const href = a.getAttribute('href') || '';
+
+      if (!href.includes('/episodes/')) {
+        continue;
+      }
+
+      const episodeMatch = href.match(/\/episodes\/([^/?#]+)/);
+      const episodeId = episodeMatch ? episodeMatch[1] : '';
+
+      if (!episodeId || seen.has(episodeId)) {
+        continue;
+      }
+
+      seen.add(episodeId);
+      uniqueAnchors.push(a);
+    }
+
+    return uniqueAnchors.slice(0, 50).map((a, index) => {
       const href = a.getAttribute('href') || '';
 
       const rankImg =
-        a.querySelector('img[class*="EpisodeListItem_ranking"]') ||
-        a.querySelector('img[alt$="位"]');
+        a.querySelector('img[alt$="位"]') ||
+        a.querySelector('img[class*="ranking"]') ||
+        a.querySelector('img[class*="Ranking"]');
 
       const rankAlt = rankImg ? rankImg.getAttribute('alt') || '' : '';
       const rankMatch = rankAlt.match(/(\d+)位/);
 
-      const thumbnailImg = a.querySelector('img[src*="thumbnail/episode"]');
+      const rawLines = String(a.innerText || '')
+        .split('\n')
+        .map((line) => normalize(line))
+        .filter(Boolean)
+        .filter((line) => line !== 'あとでみる');
+
+      const broadcastLine =
+        rawLines.find((line) => /放送分$/.test(line)) || '';
+
+      const endLine =
+        rawLines.find((line) => /終了予定|配信終了/.test(line)) || '';
+
+      const contentLines = rawLines.filter((line) => {
+        if (line === broadcastLine) return false;
+        if (line === endLine) return false;
+        if (/^\d+位$/.test(line)) return false;
+        return true;
+      });
+
+      const programTitle =
+        normalize(
+          a.querySelector('[class*="EpisodeListItem_title"]')?.textContent ||
+          a.querySelector('[class*="title"]')?.textContent ||
+          contentLines[0] ||
+          ''
+        );
+
+      const episodeTitle =
+        normalize(
+          a.querySelector('[class*="EpisodeListItem_subTitle"]')?.textContent ||
+          a.querySelector('[class*="subtitle"]')?.textContent ||
+          a.querySelector('[class*="subTitle"]')?.textContent ||
+          contentLines[1] ||
+          ''
+        );
 
       return {
         fallbackRank: index + 1,
         rank: rankMatch ? Number(rankMatch[1]) : index + 1,
-        program_title: getText(a, '[class*="EpisodeListItem_title"]'),
-        episode_title: getText(a, '[class*="EpisodeListItem_subTitle"]'),
-        subInfos: getAllText(a, '[class*="EpisodeListItem_subInfo"]'),
+        program_title: programTitle,
+        episode_title: episodeTitle,
+        subInfos: broadcastLine ? [broadcastLine] : [],
         episodePath: href,
-        thumbnailUrl: thumbnailImg ? thumbnailImg.getAttribute('src') || '' : '',
+        debugText: rawLines.join(' | '),
       };
     });
   }
 );
+
+console.log(`[DEBUG] ${target.type}: rows=${rows.length}`);
+console.log(`[DEBUG] ${target.type}: sample=${JSON.stringify(rows.slice(0, 3), null, 2)}`);
   const items = rows
     .map((row) => {
       const episodeId = extractEpisodeId(row.episodePath);
