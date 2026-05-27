@@ -1,0 +1,40 @@
+name: Capture TVer Ranking
+
+on:
+  workflow_dispatch:
+    inputs:
+      rankingType:
+        description: 'Ranking type. all / drama / variety / talk / vtr / local / empty means all'
+        required: false
+        default: ''
+
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Capture TVer ranking
+        env:
+          GAS_WEB_APP_URL: ${{ secrets.GAS_WEB_APP_URL }}
+          GAS_TOKEN: ${{ secrets.GAS_TOKEN }}
+        run: |
+          if [ -n "${{ github.event.inputs.rankingType }}" ]; then
+            npm run capture:tver-ranking -- --type=${{ github.event.inputs.rankingType }}
+          else
+            npm run capture:tver-ranking
+          fi
