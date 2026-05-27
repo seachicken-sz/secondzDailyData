@@ -2,9 +2,6 @@ name: Capture TVer Engagement
 
 on:
   workflow_dispatch:
-  schedule:
-    # JST 毎時15分
-    - cron: '15 * * * *'
 
 jobs:
   capture:
