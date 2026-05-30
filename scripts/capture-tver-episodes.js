@@ -833,9 +833,30 @@ async function enrichTalentSearchEpisode(page, item, talent) {
 
   const seriesUrlFromItem = toAbsoluteUrl(item.seriesHref || '');
   const seriesUrlFromDetail = pickFirstSeriesUrlFromDetail(detail);
-  const seriesUrl = seriesUrlFromItem || seriesUrlFromDetail;
 
+  const seriesUrlCandidates = [
+    seriesUrlFromItem,
+    seriesUrlFromDetail,
+  ]
+    .map((url) => toAbsoluteUrl(url))
+    .filter(isSeriesUrl);
+
+  const seriesUrl = Array.from(new Set(seriesUrlCandidates))[0] || '';
   const programId = extractProgramIdFromUrl(seriesUrl);
+
+  if (!seriesUrl || !programId) {
+    console.log({
+      reason: 'series_url or program_id not found from talent episode',
+      talent: talent.name,
+      episodeUrl,
+      episodeId,
+      seriesUrlFromItem,
+      seriesUrlFromDetail,
+      seriesLinks: detail.seriesLinks,
+      ogTitle: detail.ogTitle,
+      pageTitle: detail.pageTitle,
+    });
+  }
 
   const textsForLabels = [
     ...(Array.isArray(item.subInfoTexts) ? item.subInfoTexts : []),
@@ -991,7 +1012,13 @@ function mergeEpisodesBeforePost(episodes) {
   return merged;
 }
 
-async function postEpisodesToGas(episodes, crawledSeriesUrls) {
+async function postEpisodesToGas({
+  episodes,
+  crawledSeriesUrls,
+  searchedProgramUrls,
+  programSearchCompleted,
+  talentSearchCompleted,
+}) {
   const response = await fetch(GAS_WEB_APP_URL, {
     method: 'POST',
     headers: {
@@ -1002,6 +1029,9 @@ async function postEpisodesToGas(episodes, crawledSeriesUrls) {
       action: 'upsertEpisodes',
       episodes,
       crawledSeriesUrls,
+      searchedProgramUrls,
+      programSearchCompleted,
+      talentSearchCompleted,
     }),
   });
 
@@ -1046,6 +1076,15 @@ async function main() {
   const allEpisodes = [];
   const crawledSeriesUrls = [];
 
+  // 今回program_master起点で検索対象にしたURL一覧。
+  // GAS側で「検索対象だったが取得できなかった番組」の判定に使う。
+  const searchedProgramUrls = programs
+    .map((program) => program.url)
+    .filter(Boolean);
+
+  let programSearchCompleted = false;
+  let talentSearchCompleted = false;
+
   for (const program of programs) {
     try {
       console.log(`Capture program: ${program.title} / ${program.url}`);
@@ -1055,13 +1094,20 @@ async function main() {
       console.log(`  episodes: ${episodes.length}`);
 
       allEpisodes.push(...episodes);
-      crawledSeriesUrls.push(program.url);
+
+      // 掲載終了判定に使うため、program_master起点で取得成功した番組URLだけ入れる。
+      // DOM変更などで0件になった場合の誤爆を避けるため、0件時は成功扱いにしない。
+      if (episodes.length > 0) {
+        crawledSeriesUrls.push(program.url);
+      }
 
     } catch (error) {
       console.error(`Failed program: ${program.title} / ${program.url}`);
       console.error(error);
     }
   }
+
+  programSearchCompleted = true;
 
   for (const talent of talents) {
     try {
@@ -1073,17 +1119,18 @@ async function main() {
 
       allEpisodes.push(...episodes);
 
-      episodes.forEach((episode) => {
-        if (episode.series_url) {
-          crawledSeriesUrls.push(episode.series_url);
-        }
-      });
+      // 重要:
+      // 出演者検索由来のseries_urlはcrawledSeriesUrlsに入れない。
+      // 出演者検索は番組ページの全episode一覧ではないため、
+      // 掲載終了判定に使うとend_flag誤爆の原因になる。
 
     } catch (error) {
       console.error(`Failed talent: ${talent.name} / ${talent.url}`);
       console.error(error);
     }
   }
+
+  talentSearchCompleted = true;
 
   await browser.close();
 
@@ -1092,7 +1139,13 @@ async function main() {
 
   console.log(JSON.stringify(mergedEpisodes, null, 2));
 
-  const result = await postEpisodesToGas(mergedEpisodes, uniqueCrawledSeriesUrls);
+  const result = await postEpisodesToGas({
+    episodes: mergedEpisodes,
+    crawledSeriesUrls: uniqueCrawledSeriesUrls,
+    searchedProgramUrls,
+    programSearchCompleted,
+    talentSearchCompleted,
+  });
 
   console.log(`Total: ${result.total}`);
   console.log(`Appended: ${result.appended}`);
@@ -1101,6 +1154,26 @@ async function main() {
 
   if (result.appendedPrograms !== undefined) {
     console.log(`AppendedPrograms: ${result.appendedPrograms}`);
+  }
+
+  if (result.activatedPrograms !== undefined) {
+    console.log(`ActivatedPrograms: ${result.activatedPrograms}`);
+  }
+
+  if (result.workActivatedPrograms !== undefined) {
+    console.log(`WorkActivatedPrograms: ${result.workActivatedPrograms}`);
+  }
+
+  if (result.workDisabledPrograms !== undefined) {
+    console.log(`WorkDisabledPrograms: ${result.workDisabledPrograms}`);
+  }
+
+  if (result.activeDisabledPrograms !== undefined) {
+    console.log(`ActiveDisabledPrograms: ${result.activeDisabledPrograms}`);
+  }
+
+  if (result.memberUpdatedPrograms !== undefined) {
+    console.log(`MemberUpdatedPrograms: ${result.memberUpdatedPrograms}`);
   }
 
   if (result.sentToTarget !== undefined) {
