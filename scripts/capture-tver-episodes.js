@@ -637,10 +637,32 @@ async function captureEpisodeDetailFromEpisodePage(page, episodeUrl) {
     const pageTitle = document.title || '';
 
     const bodyText = document.body?.textContent || '';
+    const htmlText = document.documentElement?.innerHTML || '';
 
-    const seriesLinks = Array.from(
+    // episodeページ下部の「番組TOPへ」ボタンを最優先で拾う
+    const seriesLinkFromEpisodeDescription =
+      document
+        .querySelector('a[class*="EpisodeDescription_seriesLink"][href*="/series/"]')
+        ?.getAttribute('href') || '';
+
+    // 念のため「番組TOPへ」という文言のリンクも拾う
+    const seriesLinkByText = Array.from(
+      document.querySelectorAll('a[href*="/series/"]')
+    ).find((link) => {
+      return (link.textContent || '').includes('番組TOPへ');
+    })?.getAttribute('href') || '';
+
+    const seriesLinksFromAnchors = Array.from(
       document.querySelectorAll('a[href*="/series/"]')
     ).map((link) => link.getAttribute('href') || '');
+
+    const seriesLinksFromHtml = Array.from(
+      new Set(
+        Array.from(
+          htmlText.matchAll(/https?:\/\/tver\.jp\/series\/[^"'\\\s<>]+|\/series\/[^"'\\\s<>]+/g)
+        ).map((match) => match[0])
+      )
+    );
 
     const headingTexts = Array.from(
       document.querySelectorAll('h1, h2, h3')
@@ -655,7 +677,15 @@ async function captureEpisodeDetailFromEpisodePage(page, episodeUrl) {
       ogTitle,
       pageTitle,
       bodyText,
-      seriesLinks,
+      htmlText,
+      seriesLinkFromEpisodeDescription,
+      seriesLinkByText,
+      seriesLinks: [
+        seriesLinkFromEpisodeDescription,
+        seriesLinkByText,
+        ...seriesLinksFromAnchors,
+        ...seriesLinksFromHtml,
+      ],
       headingTexts,
       subInfoTexts,
     };
@@ -663,11 +693,19 @@ async function captureEpisodeDetailFromEpisodePage(page, episodeUrl) {
 }
 
 function pickFirstSeriesUrlFromDetail(detail) {
-  const seriesLinks = Array.isArray(detail.seriesLinks) ? detail.seriesLinks : [];
+  const candidates = [
+    detail.seriesLinkFromEpisodeDescription,
+    detail.seriesLinkByText,
+    ...(Array.isArray(detail.seriesLinks) ? detail.seriesLinks : []),
+  ];
 
-  const seriesHref = seriesLinks.find(isSeriesUrl) || '';
+  const normalizedSeriesUrls = candidates
+    .map((href) => toAbsoluteUrl(href))
+    .filter(isSeriesUrl);
 
-  return toAbsoluteUrl(seriesHref);
+  const uniqueSeriesUrls = Array.from(new Set(normalizedSeriesUrls));
+
+  return uniqueSeriesUrls[0] || '';
 }
 
 function pickBroadcastLabelFromTexts(texts) {
