@@ -558,10 +558,12 @@ async function captureEpisodeLinksFromTalentSearchPage(page, talent) {
         link.parentElement;
 
       const programTitle =
+        link.querySelector('[class*="EpisodeListItem_title"]')?.textContent ||
         card?.querySelector('[class*="EpisodeListItem_title"]')?.textContent ||
         '';
-
+      
       const episodeTitle =
+        link.querySelector('[class*="EpisodeListItem_subTitle"]')?.textContent ||
         card?.querySelector('[class*="EpisodeListItem_subTitle"]')?.textContent ||
         '';
 
@@ -786,20 +788,48 @@ function pickProgramTitleFromSearchItem(item, detail) {
 }
 
 function pickEpisodeTitleFromSearchItem(item, detail) {
+  // talent検索ページのカード上のサブタイトルを最優先にする。
+  // 例:
+  // <div class="EpisodeListItem_subTitle__R75OL">EP.1...</div>
   const episodeTitleFromSearch = normalizeText(item.episodeTitle);
 
   if (episodeTitleFromSearch) {
     return episodeTitleFromSearch;
   }
 
+  const episodeDescriptionSubTitle = normalizeText(detail.episodeDescriptionSubTitle);
+
+  if (episodeDescriptionSubTitle) {
+    return episodeDescriptionSubTitle;
+  }
+
+  const episodeDescriptionTitle = normalizeText(detail.episodeDescriptionTitle);
+  const programTitle = normalizeText(item.programTitle);
+
+  // EpisodeDescription_title が番組名ではなくエピソード名として取れるページ向けの救済。
+  if (
+    episodeDescriptionTitle &&
+    episodeDescriptionTitle !== programTitle
+  ) {
+    return episodeDescriptionTitle;
+  }
   const titleParts = extractTitlePartsFromOgTitle(detail.ogTitle, detail.pageTitle);
 
-  if (titleParts.episodeTitle) {
+  if (
+    titleParts.episodeTitle &&
+    !isGenericTverTitleText(titleParts.episodeTitle)
+  ) {
     return titleParts.episodeTitle;
   }
 
   const headingTexts = Array.isArray(detail.headingTexts) ? detail.headingTexts : [];
-  const heading = headingTexts.map(normalizeText).find(Boolean);
+  const heading = headingTexts
+    .map(normalizeText)
+    .find((text) => {
+      return text &&
+        text !== programTitle &&
+        !isGenericTverTitleText(text);
+    });
 
   return heading || '';
 }
