@@ -1155,3 +1155,19 @@ main().catch((error) => {
   console.error(error);
   process.exit(1);
 });
+
+function isGenericTverTitleText(text) {
+  const value = normalizeText(text);
+
+  if (!value) {
+    return true;
+  }
+
+  return value.includes('見逃し無料配信') ||
+    value.includes('TVer') ||
+    value === 'ドラマ' ||
+    value === 'バラエティ' ||
+    value === 'アニメ' ||
+    value === '報道・ドキュメンタリー' ||
+    value === 'スポーツ';
+}
