@@ -1171,14 +1171,23 @@ main().catch((error) => {
   process.exit(1);
 });
 
-function isGenericTverTitleText(text) {
+function isInvalidEpisodeTitleText(text) {
   const value = normalizeText(text);
 
   if (!value) {
     return true;
   }
 
-  return value.includes('見逃し無料配信') ||
+  return value === 'カテゴリ' ||
+    value === '配信中エピソード' ||
+    value === 'すべて見る' ||
+    value === '詳細を見る' ||
+    value === '番組TOPへ' ||
+    value === 'あとでみる' ||
+    value === 'シェア' ||
+    value === 'いいね登録' ||
+    value === 'お気に入り登録' ||
+    value.includes('見逃し無料配信') ||
     value.includes('TVer') ||
     value === 'ドラマ' ||
     value === 'バラエティ' ||
