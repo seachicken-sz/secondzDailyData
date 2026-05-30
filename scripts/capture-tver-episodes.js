@@ -551,20 +551,19 @@ async function captureEpisodeLinksFromTalentSearchPage(page, talent) {
       const href = link.getAttribute('href') || '';
 
       const card =
+        link.closest('[class*="EpisodeListItem_container"]') ||
         link.closest('article') ||
         link.closest('li') ||
         link.closest('[class*="Episode"]') ||
         link.closest('[class*="Card"]') ||
         link.parentElement;
 
-      const linkText = link.textContent || '';
-      const cardText = card?.textContent || linkText;
+      const programTitle =
+        card?.querySelector('[class*="EpisodeListItem_title"]')?.textContent ||
+        '';
 
-      const titleCandidate =
-        link.querySelector('[class*="EpisodeListItem_title"]')?.textContent ||
-        link.querySelector('[class*="title"]')?.textContent ||
-        link.getAttribute('aria-label') ||
-        linkText ||
+      const episodeTitle =
+        card?.querySelector('[class*="EpisodeListItem_subTitle"]')?.textContent ||
         '';
 
       const imageAlt =
@@ -572,21 +571,25 @@ async function captureEpisodeLinksFromTalentSearchPage(page, talent) {
         card?.querySelector('img')?.getAttribute('alt') ||
         '';
 
+      const linkText = link.textContent || '';
+      const cardText = card?.textContent || linkText;
+
       const seriesHref =
         card?.querySelector('a[href*="/series/"]')?.getAttribute('href') ||
         '';
 
       const subInfoTexts = Array.from(
-        card?.querySelectorAll('[class*="subInfo"], [class*="SubInfo"], [class*="meta"], [class*="Meta"]') || []
+        card?.querySelectorAll('[class*="EpisodeListItem_subInfo"], [class*="subInfo"], [class*="SubInfo"], [class*="meta"], [class*="Meta"]') || []
       ).map((element) => element.textContent || '');
 
       return {
         href,
         index,
+        programTitle,
+        episodeTitle,
+        imageAlt,
         linkText,
         cardText,
-        titleCandidate,
-        imageAlt,
         seriesHref,
         subInfoTexts,
       };
@@ -765,10 +768,10 @@ function extractTitlePartsFromOgTitle(ogTitle, pageTitle) {
 }
 
 function pickEpisodeTitleFromSearchItem(item, detail) {
-  const titleFromSearch = normalizeText(item.titleCandidate);
+  const episodeTitleFromSearch = normalizeText(item.episodeTitle);
 
-  if (titleFromSearch) {
-    return titleFromSearch;
+  if (episodeTitleFromSearch) {
+    return episodeTitleFromSearch;
   }
 
   const titleParts = extractTitlePartsFromOgTitle(detail.ogTitle, detail.pageTitle);
@@ -784,16 +787,22 @@ function pickEpisodeTitleFromSearchItem(item, detail) {
 }
 
 function pickProgramTitleFromSearchItem(item, detail) {
-  const titleParts = extractTitlePartsFromOgTitle(detail.ogTitle, detail.pageTitle);
+  const programTitleFromSearch = normalizeText(item.programTitle);
 
-  if (titleParts.programTitle) {
-    return titleParts.programTitle;
+  if (programTitleFromSearch) {
+    return programTitleFromSearch;
   }
 
   const imageAlt = normalizeText(item.imageAlt);
 
   if (imageAlt) {
     return imageAlt;
+  }
+
+  const titleParts = extractTitlePartsFromOgTitle(detail.ogTitle, detail.pageTitle);
+
+  if (titleParts.programTitle) {
+    return titleParts.programTitle;
   }
 
   return '';
