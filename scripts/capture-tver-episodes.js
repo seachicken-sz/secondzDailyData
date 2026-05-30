@@ -55,24 +55,53 @@ function toAbsoluteUrl(href) {
   return normalizeUrlWithoutParams(`${TVER_BASE_URL}/${href}`);
 }
 
+/**
+ * TVerのepisode URLだけを許可する。
+ */
+function toAbsoluteTverEpisodeUrl(href) {
+  const absoluteUrl = toAbsoluteUrl(href);
+
+  if (/^https?:\/\/tver\.jp\/episodes\/[^/?#]+$/.test(absoluteUrl)) {
+    return absoluteUrl;
+  }
+
+  return '';
+}
+
+/**
+ * TVerのseries URLだけを許可する。
+ * TELASAなどの /series/ は除外する。
+ */
+function toAbsoluteTverSeriesUrl(href) {
+  const absoluteUrl = toAbsoluteUrl(href);
+
+  if (/^https?:\/\/tver\.jp\/series\/sr[a-zA-Z0-9]+$/.test(absoluteUrl)) {
+    return absoluteUrl;
+  }
+
+  return '';
+}
+
 function extractEpisodeIdFromHref(href) {
-  const normalized = normalizeUrlWithoutParams(href);
-  const match = normalized.match(/\/episodes\/([^/?#]+)/);
+  const episodeUrl = toAbsoluteTverEpisodeUrl(href);
+  const match = episodeUrl.match(/^https?:\/\/tver\.jp\/episodes\/([^/?#]+)$/);
+
   return match ? match[1] : '';
 }
 
 function extractProgramIdFromUrl(url) {
-  const normalized = normalizeUrlWithoutParams(url);
-  const match = normalized.match(/(?:https?:\/\/tver\.jp)?\/series\/([^/?#]+)/);
+  const seriesUrl = toAbsoluteTverSeriesUrl(url);
+  const match = seriesUrl.match(/^https?:\/\/tver\.jp\/series\/(sr[a-zA-Z0-9]+)$/);
+
   return match ? match[1] : '';
 }
 
 function isEpisodeUrl(url) {
-  return /\/episodes\/[^/?#]+/.test(String(url || ''));
+  return Boolean(toAbsoluteTverEpisodeUrl(url));
 }
 
 function isSeriesUrl(url) {
-  return /\/series\/[^/?#]+/.test(normalizeUrlWithoutParams(url));
+  return Boolean(toAbsoluteTverSeriesUrl(url));
 }
 
 function isBroadcastLabel(text) {
@@ -673,9 +702,8 @@ function pickFirstSeriesUrlFromDetail(detail) {
   ];
 
   const normalizedSeriesUrls = candidates
-    .map((href) => toAbsoluteUrl(href))
-    .map(normalizeUrlWithoutParams)
-    .filter(isSeriesUrl);
+    .map((href) => toAbsoluteTverSeriesUrl(href))
+    .filter(Boolean);
 
   const uniqueSeriesUrls = Array.from(new Set(normalizedSeriesUrls));
 
@@ -789,24 +817,20 @@ async function enrichTalentSearchEpisode(page, item, talent) {
 
   const detail = await captureEpisodeDetailFromEpisodePage(page, episodeUrl);
 
-  const canonicalEpisodeUrl = toAbsoluteUrl(detail.canonicalUrl || episodeUrl);
-  const finalEpisodeUrl = isEpisodeUrl(canonicalEpisodeUrl)
-    ? normalizeUrlWithoutParams(canonicalEpisodeUrl)
-    : normalizeUrlWithoutParams(episodeUrl);
+const canonicalEpisodeUrl = toAbsoluteTverEpisodeUrl(detail.canonicalUrl || episodeUrl);
+const finalEpisodeUrl = canonicalEpisodeUrl || toAbsoluteTverEpisodeUrl(episodeUrl);
 
-  const seriesUrlFromItem = toAbsoluteUrl(item.seriesHref || '');
-  const seriesUrlFromDetail = pickFirstSeriesUrlFromDetail(detail);
+ const seriesUrlFromItem = toAbsoluteTverSeriesUrl(item.seriesHref || '');
+const seriesUrlFromDetail = pickFirstSeriesUrlFromDetail(detail);
 
-  const seriesUrlCandidates = [
-    seriesUrlFromItem,
-    seriesUrlFromDetail,
-  ]
-    .map((url) => toAbsoluteUrl(url))
-    .map(normalizeUrlWithoutParams)
-    .filter(isSeriesUrl);
+const seriesUrlCandidates = [
+  seriesUrlFromItem,
+  seriesUrlFromDetail,
+]
+  .filter(Boolean);
 
-  const seriesUrl = normalizeUrlWithoutParams(Array.from(new Set(seriesUrlCandidates))[0] || '');
-  const programId = extractProgramIdFromUrl(seriesUrl);
+const seriesUrl = Array.from(new Set(seriesUrlCandidates))[0] || '';
+const programId = extractProgramIdFromUrl(seriesUrl);
 
   if (!seriesUrl || !programId) {
     console.log({
