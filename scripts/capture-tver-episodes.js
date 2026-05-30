@@ -881,9 +881,7 @@ const programId = extractProgramIdFromUrl(seriesUrl);
     end_label: endLabel,
     end_at: parseEndAt(endLabel),
     end_flag: false,
-
-    // 検索結果の先頭が最新とは限らないので、出演者検索単独ではTRUEにしない。
-    new_flag: false,
+    new_flag: true,
 
     series_url: seriesUrl,
     members: '',
