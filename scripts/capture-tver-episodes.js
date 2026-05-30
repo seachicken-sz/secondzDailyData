@@ -645,6 +645,7 @@ async function captureEpisodeDetailFromEpisodePage(page, episodeUrl) {
     const bodyText = document.body?.textContent || '';
     const htmlText = document.documentElement?.innerHTML || '';
 
+    // episodeページ内の「番組TOPへ」リンク
     const seriesLinkFromEpisodeDescription =
       document
         .querySelector('a[class*="EpisodeDescription_seriesLink"][href*="/series/"]')
@@ -668,12 +669,22 @@ async function captureEpisodeDetailFromEpisodePage(page, episodeUrl) {
       )
     );
 
-    const headingTexts = Array.from(
-      document.querySelectorAll('h1, h2, h3')
-    ).map((element) => element.textContent || '');
+    // episodeページ内の正式な番組名・エピソード名
+    // 例:
+    // <h2 class="EpisodeDescription_seriesTitle__...">アポロの歌</h2>
+    // <h1 class="EpisodeDescription_title__...">EP.1...</h1>
+    const episodeDescriptionSeriesTitle =
+      document.querySelector('[class*="EpisodeDescription_seriesTitle"]')?.textContent ||
+      '';
+
+    const episodeDescriptionTitle =
+      document.querySelector('[class*="EpisodeDescription_title"]')?.textContent ||
+      '';
 
     const subInfoTexts = Array.from(
-      document.querySelectorAll('[class*="subInfo"], [class*="SubInfo"], [class*="meta"], [class*="Meta"]')
+      document.querySelectorAll(
+        '[class*="EpisodeDescription_metaDetail"], [class*="EpisodeDescription_broadcastDateLabel"], [class*="EpisodeDescription_endAtLabel"], [class*="subInfo"], [class*="SubInfo"], [class*="meta"], [class*="Meta"]'
+      )
     ).map((element) => element.textContent || '');
 
     return {
@@ -690,7 +701,8 @@ async function captureEpisodeDetailFromEpisodePage(page, episodeUrl) {
         ...seriesLinksFromAnchors,
         ...seriesLinksFromHtml,
       ],
-      headingTexts,
+      episodeDescriptionSeriesTitle,
+      episodeDescriptionTitle,
       subInfoTexts,
     };
   });
@@ -766,18 +778,28 @@ function extractTitlePartsFromOgTitle(ogTitle, pageTitle) {
 }
 
 function pickProgramTitleFromSearchItem(item, detail) {
+  // episodeページ内の正式な番組名を最優先
+  const programTitleFromDetail = normalizeText(detail.episodeDescriptionSeriesTitle);
+
+  if (programTitleFromDetail) {
+    return programTitleFromDetail;
+  }
+
+  // 次にtalent検索カード上の番組名
   const programTitleFromSearch = normalizeText(item.programTitle);
 
   if (programTitleFromSearch) {
     return programTitleFromSearch;
   }
 
+  // 画像altは番組名になっていることが多い
   const imageAlt = normalizeText(item.imageAlt);
 
   if (imageAlt) {
     return imageAlt;
   }
 
+  // 最後の保険
   const titleParts = extractTitlePartsFromOgTitle(detail.ogTitle, detail.pageTitle);
 
   if (titleParts.programTitle) {
@@ -788,50 +810,43 @@ function pickProgramTitleFromSearchItem(item, detail) {
 }
 
 function pickEpisodeTitleFromSearchItem(item, detail) {
-  // talent検索ページのカード上のサブタイトルを最優先にする。
+  const programTitleFromDetail = normalizeText(detail.episodeDescriptionSeriesTitle);
+  const programTitleFromSearch = normalizeText(item.programTitle);
+  const programTitle = programTitleFromDetail || programTitleFromSearch;
+
+  // episodeページ内の正式なエピソード名を最優先
   // 例:
-  // <div class="EpisodeListItem_subTitle__R75OL">EP.1...</div>
+  // <h1 class="EpisodeDescription_title__...">EP.1...</h1>
+  const episodeTitleFromDetail = normalizeText(detail.episodeDescriptionTitle);
+
+  if (
+    episodeTitleFromDetail &&
+    episodeTitleFromDetail !== programTitle &&
+    !isInvalidEpisodeTitleText(episodeTitleFromDetail)
+  ) {
+    return episodeTitleFromDetail;
+  }
+
+  // 次にtalent検索カード上のサブタイトル
   const episodeTitleFromSearch = normalizeText(item.episodeTitle);
 
-  if (episodeTitleFromSearch) {
-    return episodeTitleFromSearch;
-  }
-
-  const episodeDescriptionSubTitle = normalizeText(detail.episodeDescriptionSubTitle);
-
-  if (episodeDescriptionSubTitle) {
-    return episodeDescriptionSubTitle;
-  }
-
-  const episodeDescriptionTitle = normalizeText(detail.episodeDescriptionTitle);
-  const programTitle = normalizeText(item.programTitle);
-
-  // EpisodeDescription_title が番組名ではなくエピソード名として取れるページ向けの救済。
   if (
-    episodeDescriptionTitle &&
-    episodeDescriptionTitle !== programTitle
+    episodeTitleFromSearch &&
+    !isInvalidEpisodeTitleText(episodeTitleFromSearch)
   ) {
-    return episodeDescriptionTitle;
+    return episodeTitleFromSearch;
   }
   const titleParts = extractTitlePartsFromOgTitle(detail.ogTitle, detail.pageTitle);
 
   if (
     titleParts.episodeTitle &&
-    !isGenericTverTitleText(titleParts.episodeTitle)
+    titleParts.episodeTitle !== programTitle &&
+    !isInvalidEpisodeTitleText(titleParts.episodeTitle)
   ) {
     return titleParts.episodeTitle;
   }
 
-  const headingTexts = Array.isArray(detail.headingTexts) ? detail.headingTexts : [];
-  const heading = headingTexts
-    .map(normalizeText)
-    .find((text) => {
-      return text &&
-        text !== programTitle &&
-        !isGenericTverTitleText(text);
-    });
-
-  return heading || '';
+  return '';
 }
 
 /**
