@@ -926,7 +926,7 @@ const programId = extractProgramIdFromUrl(seriesUrl);
     end_label: endLabel,
     end_at: parseEndAt(endLabel),
     end_flag: false,
-    new_flag: true,
+    new_flag: false,
 
     series_url: seriesUrl,
     members: '',
