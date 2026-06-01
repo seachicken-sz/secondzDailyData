@@ -1083,17 +1083,14 @@ async function captureEpisodesForTalent(page, talent) {
 
   return episodes;
 }
-
-body: JSON.stringify({
-  token: GAS_WEB_APP_TOKEN,
-  action: 'upsertEpisodes',
+async function postEpisodesToGas({
   episodes,
   crawledSeriesUrls,
   noEpisodeSeriesUrls,
   searchedProgramUrls,
   programSearchCompleted,
   talentSearchCompleted,
-}),
+}) {
   const response = await fetch(GAS_WEB_APP_URL, {
     method: 'POST',
     headers: {
@@ -1104,6 +1101,7 @@ body: JSON.stringify({
       action: 'upsertEpisodes',
       episodes,
       crawledSeriesUrls,
+      noEpisodeSeriesUrls,
       searchedProgramUrls,
       programSearchCompleted,
       talentSearchCompleted,
@@ -1126,7 +1124,6 @@ body: JSON.stringify({
 
   return result;
 }
-
 async function main() {
   requireEnv('GAS_WEB_APP_URL', GAS_WEB_APP_URL);
   requireEnv('GAS_WEB_APP_TOKEN', GAS_WEB_APP_TOKEN);
@@ -1166,17 +1163,28 @@ async function main() {
       try {
         console.log(`Capture program: ${program.title} / ${program.url}`);
 
-        const episodes = await captureEpisodesForProgram(page, program);
+const captureResult = await captureEpisodesForProgram(page, program);
+const episodes = captureResult.episodes || [];
 
-        console.log(`  episodes: ${episodes.length}`);
+console.log(`  raw episodes: ${captureResult.rawEpisodeCount}`);
+console.log(`  target raw episodes: ${captureResult.targetRawEpisodeCount}`);
+console.log(`  episodes: ${episodes.length}`);
 
-        allEpisodes.push(...episodes);
+allEpisodes.push(...episodes);
 
-        // 掲載終了判定に使うため、program_master起点で取得成功した番組URLだけ入れる。
-        // DOM変更などで0件になった場合の誤爆を避けるため、0件時は成功扱いにしない。
-        if (episodes.length > 0) {
-          crawledSeriesUrls.push(normalizeUrlWithoutParams(program.url));
-        }
+const normalizedProgramUrl = normalizeUrlWithoutParams(program.url);
+
+// 掲載終了判定に使う。
+// 保存対象episodeが1件以上あるときだけ、既存episodeの終了判定に使う。
+if (episodes.length > 0) {
+  crawledSeriesUrls.push(normalizedProgramUrl);
+}
+
+// active_flag FALSE判定に使う。
+// 番組ページの本編エピソードが0件だった場合だけ入れる。
+if (captureResult.rawEpisodeCount === 0) {
+  noEpisodeSeriesUrls.push(normalizedProgramUrl);
+}
 
       } catch (error) {
         console.error(`Failed program: ${program.title} / ${program.url}`);
@@ -1218,16 +1226,18 @@ async function main() {
   // 出演者判定・program_master更新・episode_master保存を行うため。
   const episodesForPost = allEpisodes;
   const uniqueCrawledSeriesUrls = Array.from(new Set(crawledSeriesUrls));
+  const uniqueNoEpisodeSeriesUrls = Array.from(new Set(noEpisodeSeriesUrls));
 
   console.log(JSON.stringify(episodesForPost, null, 2));
 
-  const result = await postEpisodesToGas({
-    episodes: episodesForPost,
-    crawledSeriesUrls: uniqueCrawledSeriesUrls,
-    searchedProgramUrls,
-    programSearchCompleted,
-    talentSearchCompleted,
-  });
+const result = await postEpisodesToGas({
+  episodes: episodesForPost,
+  crawledSeriesUrls: uniqueCrawledSeriesUrls,
+  noEpisodeSeriesUrls: uniqueNoEpisodeSeriesUrls,
+  searchedProgramUrls,
+  programSearchCompleted,
+  talentSearchCompleted,
+});
 
   console.log(`Total: ${result.total}`);
   console.log(`Appended: ${result.appended}`);
