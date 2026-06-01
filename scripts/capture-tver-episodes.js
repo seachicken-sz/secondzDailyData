@@ -352,6 +352,37 @@ function parseEndAt(endLabel) {
   return `${year}-${pad2(month)}-${pad2(day)} ${hour}:${pad2(minute)}`;
 }
 
+function toBoolean(value) {
+  if (value === true) {
+    return true;
+  }
+
+  const text = String(value || '').trim().toUpperCase();
+
+  return text === 'TRUE' ||
+    text === '1' ||
+    text === 'YES' ||
+    text === 'Y' ||
+    text === '対象' ||
+    text === '有効';
+}
+
+function removeProgramTitlePrefix(rawTitle, programTitle) {
+  const title = String(rawTitle || '').trim();
+  const prefix = String(programTitle || '').trim();
+
+  if (!prefix || !title.startsWith(prefix)) {
+    return normalizeText(title);
+  }
+
+  return normalizeText(
+    title
+      .slice(prefix.length)
+      .replace(/^[\s　]+/, '')
+  );
+}
+
+
 function createEmptyMemberFlags() {
   return {
     all: false,
@@ -469,9 +500,41 @@ async function captureEpisodesForProgram(page, program) {
     });
   });
 
-  return rawEpisodes
-    .map((episode) => {
+  const useTitlePrefixFilter = toBoolean(program.title_prefix_filter_flag);
+  const programTitle = normalizeText(program.title);
+
+  let targetRawEpisodes = rawEpisodes;
+
+  if (useTitlePrefixFilter) {
+    if (!programTitle) {
+      console.log({
+        reason: 'skip title prefix filter program because title is empty',
+        source: 'program_master',
+        program,
+      });
+
+      return [];
+    }
+
+    targetRawEpisodes = rawEpisodes.filter((episode) => {
+      const rawTitle = String(episode.title || '').trim();
+      return rawTitle.startsWith(programTitle);
+    });
+
+    console.log({
+      source: 'program_master',
+      program: program.title,
+      titlePrefixFilter: true,
+      rawEpisodes: rawEpisodes.length,
+      matchedEpisodes: targetRawEpisodes.length,
+      skippedPrefixMismatch: rawEpisodes.length - targetRawEpisodes.length,
+    });
+  }
+
+  return targetRawEpisodes
+    .map((episode, filteredIndex) => {
       const href = episode.href;
+      const rawEpisodeTitle = String(episode.title || '').trim();
 
       const subInfoTexts = Array.isArray(episode.subInfoTexts)
         ? episode.subInfoTexts.map(normalizeText)
@@ -485,11 +548,18 @@ async function captureEpisodesForProgram(page, program) {
       const startAt = buildStartAt(broadcastLabel, program.time);
       const startAtText = buildStartAtText(broadcastLabel, program.time);
 
+      const episodeTitle = useTitlePrefixFilter
+        ? removeProgramTitlePrefix(rawEpisodeTitle, programTitle)
+        : normalizeText(rawEpisodeTitle);
+
       console.log({
         source: 'program_master',
         program: program.title,
         week: program.week,
         time: program.time,
+        titlePrefixFilter: useTitlePrefixFilter,
+        rawEpisodeTitle,
+        episodeTitle,
         broadcastLabel,
         startAt,
         startAtText,
@@ -500,7 +570,7 @@ async function captureEpisodesForProgram(page, program) {
         episode_id: episodeId,
         program_id: programId,
         program_title: program.title,
-        episode_title: normalizeText(episode.title),
+        episode_title: episodeTitle,
         episode_url: toAbsoluteUrl(href),
         broadcast_label: broadcastLabel,
         start_at: startAt,
@@ -508,7 +578,12 @@ async function captureEpisodesForProgram(page, program) {
         end_label: endLabel,
         end_at: parseEndAt(endLabel),
         end_flag: false,
-        new_flag: episode.index === 0,
+
+        // title_prefix_filter_flag = TRUE の場合は、
+        // 前方一致で残った中の最上位だけ TRUE。
+        // FALSE/空欄の場合は従来通り、一覧最上位だけ TRUE。
+        new_flag: filteredIndex === 0,
+
         series_url: programUrl,
         members: program.members || '',
         memberFlags: program.memberFlags || createEmptyMemberFlags(),
