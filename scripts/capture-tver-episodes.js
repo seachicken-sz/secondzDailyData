@@ -109,6 +109,21 @@ function isBroadcastLabel(text) {
   return /\d{1,2}\s*月\s*\d{1,2}\s*日(?:\(.+?\))?\s*放送分/.test(normalized);
 }
 
+function isYearBroadcastLabel(text) {
+  const normalized = normalizeForParse(text);
+  return /^\d{4}年放送$/.test(normalized);
+}
+
+function pickBroadcastLabelFromSubInfoTexts(texts) {
+  const normalizedTexts = Array.isArray(texts)
+    ? texts.map(normalizeText)
+    : [];
+
+  return normalizedTexts.find(isBroadcastLabel) ||
+    normalizedTexts.find(isYearBroadcastLabel) ||
+    '';
+}
+
 function isEndLabel(text) {
   return /終了予定/.test(normalizeForParse(text));
 }
@@ -513,7 +528,11 @@ async function captureEpisodesForProgram(page, program) {
         program,
       });
 
-      return [];
+      return {
+        episodes: [],
+        rawEpisodeCount: rawEpisodes.length,
+        targetRawEpisodeCount: 0,
+      };
     }
 
     targetRawEpisodes = rawEpisodes.filter((episode) => {
@@ -531,7 +550,7 @@ async function captureEpisodesForProgram(page, program) {
     });
   }
 
-  return targetRawEpisodes
+  const episodes = targetRawEpisodes
     .map((episode, filteredIndex) => {
       const href = episode.href;
       const rawEpisodeTitle = String(episode.title || '').trim();
@@ -540,13 +559,18 @@ async function captureEpisodesForProgram(page, program) {
         ? episode.subInfoTexts.map(normalizeText)
         : [];
 
-      const broadcastLabel = subInfoTexts.find(isBroadcastLabel) || '';
+      const broadcastLabel = pickBroadcastLabelFromSubInfoTexts(subInfoTexts);
       const endLabel = subInfoTexts.find(isEndLabel) || '';
       const episodeId = extractEpisodeIdFromHref(href);
       const programId = extractProgramIdFromUrl(programUrl);
 
-      const startAt = buildStartAt(broadcastLabel, program.time);
-      const startAtText = buildStartAtText(broadcastLabel, program.time);
+      const startAt = isBroadcastLabel(broadcastLabel)
+        ? buildStartAt(broadcastLabel, program.time)
+        : '';
+
+      const startAtText = isBroadcastLabel(broadcastLabel)
+        ? buildStartAtText(broadcastLabel, program.time)
+        : broadcastLabel;
 
       const episodeTitle = useTitlePrefixFilter
         ? removeProgramTitlePrefix(rawEpisodeTitle, programTitle)
@@ -598,6 +622,12 @@ async function captureEpisodesForProgram(page, program) {
         episode.broadcast_label
       );
     });
+
+  return {
+    episodes,
+    rawEpisodeCount: rawEpisodes.length,
+    targetRawEpisodeCount: targetRawEpisodes.length,
+  };
 }
 
 /**
@@ -1054,13 +1084,16 @@ async function captureEpisodesForTalent(page, talent) {
   return episodes;
 }
 
-async function postEpisodesToGas({
+body: JSON.stringify({
+  token: GAS_WEB_APP_TOKEN,
+  action: 'upsertEpisodes',
   episodes,
   crawledSeriesUrls,
+  noEpisodeSeriesUrls,
   searchedProgramUrls,
   programSearchCompleted,
   talentSearchCompleted,
-}) {
+}),
   const response = await fetch(GAS_WEB_APP_URL, {
     method: 'POST',
     headers: {
@@ -1117,6 +1150,7 @@ async function main() {
 
   const allEpisodes = [];
   const crawledSeriesUrls = [];
+  const noEpisodeSeriesUrls = [];
 
   // 今回program_master起点で検索対象にしたURL一覧。
   // GAS側で「検索対象だったが取得できなかった番組」の判定に使う。
