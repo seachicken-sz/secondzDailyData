@@ -1083,6 +1083,195 @@ async function captureEpisodesForTalent(page, talent) {
 
   return episodes;
 }
+
+function collectTalentNamesFromEpisodes(episodes) {
+  const names = [];
+  const seen = new Set();
+
+  episodes.forEach((episode) => {
+    const candidates = [];
+
+    if (episode.talent_name) {
+      candidates.push(episode.talent_name);
+    }
+
+    if (episode.talentName) {
+      candidates.push(episode.talentName);
+    }
+
+    if (Array.isArray(episode.talent_names)) {
+      candidates.push(...episode.talent_names);
+    }
+
+    if (Array.isArray(episode.talentNames)) {
+      candidates.push(...episode.talentNames);
+    }
+
+    if (Array.isArray(episode.detectedTalentNames)) {
+      candidates.push(...episode.detectedTalentNames);
+    }
+
+    candidates.forEach((name) => {
+      const text = String(name || '').trim();
+
+      if (!text || seen.has(text)) {
+        return;
+      }
+
+      seen.add(text);
+      names.push(text);
+    });
+  });
+
+  return names;
+}
+
+function mergeMemberFlags(episodes) {
+  const merged = createEmptyMemberFlags();
+
+  episodes.forEach((episode) => {
+    const memberFlags = episode.memberFlags || {};
+
+    Object.keys(merged).forEach((key) => {
+      if (toBoolean(memberFlags[key])) {
+        merged[key] = true;
+      }
+    });
+
+    const members = String(episode.members || '')
+      .replace(/\s+/g, '')
+      .split(',')
+      .map((value) => value.trim())
+      .filter(Boolean);
+
+    members.forEach((key) => {
+      if (Object.prototype.hasOwnProperty.call(merged, key)) {
+        merged[key] = true;
+      }
+    });
+  });
+
+  return merged;
+}
+
+function buildMembersText(memberFlags) {
+  if (toBoolean(memberFlags.all)) {
+    return 'all';
+  }
+
+  return [
+    'sato',
+    'kikuchi',
+    'matsushima',
+    'teranishi',
+    'hara',
+    'hashimoto',
+    'inomata',
+    'shinozuka',
+  ].filter((key) => toBoolean(memberFlags[key])).join(',');
+}
+
+function firstNonEmpty(episodes, key) {
+  for (const episode of episodes) {
+    const value = episode[key];
+
+    if (value !== undefined && value !== null && String(value).trim() !== '') {
+      return value;
+    }
+  }
+
+  return '';
+}
+
+function hasSource(episode, sourceType) {
+  const currentSourceType = String(episode.source_type || episode.sourceType || '').trim();
+
+  if (currentSourceType === sourceType) {
+    return true;
+  }
+
+  const sources = Array.isArray(episode.sources)
+    ? episode.sources.map((source) => String(source || '').trim())
+    : [];
+
+  return sources.includes(sourceType);
+}
+
+function mergeEpisodeItemsBeforePost(items) {
+  const programMasterItem = items.find((item) => {
+    return hasSource(item, 'program_master');
+  });
+
+  const orderedItems = programMasterItem
+    ? [programMasterItem, ...items.filter((item) => item !== programMasterItem)]
+    : items;
+
+  const memberFlags = mergeMemberFlags(items);
+  const talentNames = collectTalentNamesFromEpisodes(items);
+
+  const sources = Array.from(
+    new Set(
+      items
+        .map((item) => String(item.source_type || item.sourceType || '').trim())
+        .filter(Boolean)
+    )
+  );
+
+  const merged = {
+    source_type: sources.includes('program_master')
+      ? 'program_master'
+      : sources[0] || '',
+
+    sources,
+    talent_names: talentNames,
+
+    program_id: firstNonEmpty(orderedItems, 'program_id'),
+    episode_id: firstNonEmpty(orderedItems, 'episode_id'),
+    program_title: firstNonEmpty(orderedItems, 'program_title'),
+    episode_title: firstNonEmpty(orderedItems, 'episode_title'),
+    episode_url: firstNonEmpty(orderedItems, 'episode_url'),
+    broadcast_label: firstNonEmpty(orderedItems, 'broadcast_label'),
+    start_at: firstNonEmpty(orderedItems, 'start_at'),
+    start_at_text: firstNonEmpty(orderedItems, 'start_at_text'),
+    end_label: firstNonEmpty(orderedItems, 'end_label'),
+    end_at: firstNonEmpty(orderedItems, 'end_at'),
+    end_flag: items.some((item) => toBoolean(item.end_flag)),
+    new_flag: items.some((item) => toBoolean(item.new_flag)),
+    series_url: firstNonEmpty(orderedItems, 'series_url'),
+
+    memberFlags,
+    members: buildMembersText(memberFlags),
+  };
+
+  return merged;
+}
+
+function mergeEpisodesBeforePost(episodes) {
+  const grouped = new Map();
+
+  episodes.forEach((episode) => {
+    const episodeId = String(episode.episode_id || '').trim();
+
+    if (!episodeId) {
+      return;
+    }
+
+    if (!grouped.has(episodeId)) {
+      grouped.set(episodeId, []);
+    }
+
+    grouped.get(episodeId).push(episode);
+  });
+
+  const mergedEpisodes = [];
+
+  grouped.forEach((items) => {
+    mergedEpisodes.push(mergeEpisodeItemsBeforePost(items));
+  });
+
+  return mergedEpisodes;
+}
+
 async function postEpisodesToGas({
   episodes,
   crawledSeriesUrls,
@@ -1221,10 +1410,13 @@ if (captureResult.rawEpisodeCount === 0) {
     await browser.close();
   }
 
-  // ここではあえてepisode_id単位で統合しない。
-  // GAS側で、program_master由来とtalent_search由来を突き合わせて
-  // 出演者判定・program_master更新・episode_master保存を行うため。
-  const episodesForPost = allEpisodes;
+  // episode_id単位で統合してからGASへ送る。
+  // program_master由来があれば、番組名・エピソード名・日時・new_flagを優先する。
+  // talent_search由来は、主に出演者情報の補強に使う。
+  const episodesForPost = mergeEpisodesBeforePost(allEpisodes);
+  console.log(`RawEpisodesBeforeMerge: ${allEpisodes.length}`);
+  console.log(`MergedEpisodesForPost: ${episodesForPost.length}`);
+  
   const uniqueCrawledSeriesUrls = Array.from(new Set(crawledSeriesUrls));
   const uniqueNoEpisodeSeriesUrls = Array.from(new Set(noEpisodeSeriesUrls));
 
