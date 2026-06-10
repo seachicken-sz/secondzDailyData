@@ -506,10 +506,17 @@ async function captureEpisodesForProgram(page, program) {
 
       const title =
         link.querySelector('[class*="EpisodeListItem_title"]')?.textContent ||
+        link.querySelector('[class*="EpisodeCard_title"]')?.textContent ||
+        link.querySelector('[class*="Title_root"]')?.textContent ||
         '';
-
+      
       const subInfoTexts = Array.from(
-        link.querySelectorAll('[class*="EpisodeListItem_subInfo"]')
+        link.querySelectorAll(
+          [
+            '[class*="EpisodeListItem_subInfo"]',
+            '[class*="SubInfo_root"]'
+          ].join(',')
+        )
       ).map((element) => element.textContent || '');
 
       return {
@@ -668,15 +675,21 @@ async function captureEpisodeLinksFromTalentSearchPage(page, talent) {
         link.closest('[class*="Card"]') ||
         link.parentElement;
 
-      const programTitle =
-        link.querySelector('[class*="EpisodeListItem_title"]')?.textContent ||
-        card?.querySelector('[class*="EpisodeListItem_title"]')?.textContent ||
-        '';
-      
-      const episodeTitle =
-        link.querySelector('[class*="EpisodeListItem_subTitle"]')?.textContent ||
-        card?.querySelector('[class*="EpisodeListItem_subTitle"]')?.textContent ||
-        '';
+        const programTitle =
+          link.querySelector('[class*="EpisodeListItem_title"]')?.textContent ||
+          link.querySelector('[class*="EpisodeCard_title"]')?.textContent ||
+          link.querySelector('[class*="Title_root"]')?.textContent ||
+          card?.querySelector('[class*="EpisodeListItem_title"]')?.textContent ||
+          card?.querySelector('[class*="EpisodeCard_title"]')?.textContent ||
+          card?.querySelector('[class*="Title_root"]')?.textContent ||
+          '';
+        
+        const episodeTitle =
+          link.querySelector('[class*="EpisodeListItem_subTitle"]')?.textContent ||
+          link.querySelector('[class*="SubTitle_root"]')?.textContent ||
+          card?.querySelector('[class*="EpisodeListItem_subTitle"]')?.textContent ||
+          card?.querySelector('[class*="SubTitle_root"]')?.textContent ||
+          '';
 
       const imageAlt =
         link.querySelector('img')?.getAttribute('alt') ||
