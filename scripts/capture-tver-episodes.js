@@ -119,9 +119,15 @@ function pickBroadcastLabelFromSubInfoTexts(texts) {
     ? texts.map(normalizeText)
     : [];
 
-  return normalizedTexts.find(isBroadcastLabel) ||
-    normalizedTexts.find(isYearBroadcastLabel) ||
-    '';
+  for (const text of normalizedTexts) {
+    const cleaned = cleanBroadcastLabel(text);
+
+    if (isBroadcastLabel(cleaned)) {
+      return cleaned;
+    }
+  }
+
+  return normalizedTexts.find(isYearBroadcastLabel) || '';
 }
 
 function isEndLabel(text) {
@@ -560,7 +566,7 @@ async function captureEpisodesForProgram(page, program) {
         : [];
 
       const broadcastLabel = pickBroadcastLabelFromSubInfoTexts(subInfoTexts);
-      const endLabel = subInfoTexts.find(isEndLabel) || '';
+      const endLabel = pickEndLabelFromTexts(subInfoTexts);
       const episodeId = extractEpisodeIdFromHref(href);
       const programId = extractProgramIdFromUrl(programUrl);
 
@@ -830,11 +836,34 @@ function pickFirstSeriesUrlFromDetail(detail) {
 }
 
 function pickBroadcastLabelFromTexts(texts) {
-  return texts.map(normalizeText).find(isBroadcastLabel) || '';
-}
+  const normalizedTexts = Array.isArray(texts)
+    ? texts.map(normalizeText)
+    : [];
 
+  for (const text of normalizedTexts) {
+    const cleaned = cleanBroadcastLabel(text);
+
+    if (isBroadcastLabel(cleaned)) {
+      return cleaned;
+    }
+  }
+
+  return normalizedTexts.find(isYearBroadcastLabel) || '';
+}
 function pickEndLabelFromTexts(texts) {
-  return texts.map(normalizeText).find(isEndLabel) || '';
+  const normalizedTexts = Array.isArray(texts)
+    ? texts.map(normalizeText)
+    : [];
+
+  for (const text of normalizedTexts) {
+    const cleaned = cleanEndLabel(text);
+
+    if (cleaned) {
+      return cleaned;
+    }
+  }
+
+  return '';
 }
 
 function extractTitlePartsFromOgTitle(ogTitle, pageTitle) {
@@ -1505,4 +1534,32 @@ function isInvalidEpisodeTitleText(text) {
     value === 'アニメ' ||
     value === '報道・ドキュメンタリー' ||
     value === 'スポーツ';
+}
+
+function cleanBroadcastLabel(value) {
+  const text = normalizeForParse(value);
+
+  if (!text) {
+    return '';
+  }
+
+  const match = text.match(
+    /(?:\d{4}年)?\s*\d{1,2}\s*月\s*\d{1,2}\s*日(?:\(.+?\))?\s*放送分/
+  );
+
+  return match ? match[0].trim() : '';
+}
+
+function cleanEndLabel(value) {
+  const text = normalizeForParse(value);
+
+  if (!text || !isEndLabel(text)) {
+    return '';
+  }
+
+  const match = text.match(
+    /(?:\d{4}年)?\s*\d{1,2}\s*月\s*\d{1,2}\s*日(?:\(.+?\))?\s*\d{1,2}\s*:\s*\d{2}\s*終了予定/
+  );
+
+  return match ? match[0].trim() : text;
 }
