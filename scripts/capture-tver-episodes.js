@@ -328,13 +328,25 @@ function buildStartAtText(broadcastLabel, programTime) {
 function parseEndAt(endLabel) {
   const text = normalizeForParse(endLabel);
 
-  const match = text.match(
-    /(?:(\d{4})年)?\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日(?:\(.+?\))?\s*(\d{1,2})\s*:\s*(\d{2})/
-  );
-
-  if (!match) {
+  if (!text) {
     return '';
   }
+
+  // 「終了予定」の直前にある日時を優先して拾う
+  // 例: 6月16日(火)放送分6月23日(火)18:59 終了予定
+  // → 6月23日(火)18:59 を拾う
+  const matches = Array.from(
+    text.matchAll(
+      /(?:(\d{4})年)?\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日(?:\(.+?\))?\s*(\d{1,2})\s*:\s*(\d{2})/g
+    )
+  );
+
+  if (matches.length === 0) {
+    return '';
+  }
+
+  // 基本は最後に出てきた日時を終了予定日時として扱う
+  const match = matches[matches.length - 1];
 
   const year = match[1] ? Number(match[1]) : getCurrentYearInJst();
   const month = Number(match[2]);
@@ -371,6 +383,39 @@ function parseEndAt(endLabel) {
   }
 
   return `${year}-${pad2(month)}-${pad2(day)} ${hour}:${pad2(minute)}`;
+}
+
+function cleanEndLabel(value) {
+  const text = normalizeForParse(value);
+
+  if (!text || !isEndLabel(text)) {
+    return '';
+  }
+
+  // 「終了予定」に紐づく日時だけを抜く
+  // 複数日時が含まれる場合は最後の日時を採用
+  const matches = Array.from(
+    text.matchAll(
+      /(?:\d{4}年)?\s*\d{1,2}\s*月\s*\d{1,2}\s*日(?:\(.+?\))?\s*\d{1,2}\s*:\s*\d{2}\s*終了予定/g
+    )
+  );
+
+  if (matches.length > 0) {
+    return matches[matches.length - 1][0].trim();
+  }
+
+  // 念のため、「終了予定」直前の日時を拾って整形
+  const fallbackMatches = Array.from(
+    text.matchAll(
+      /(?:\d{4}年)?\s*\d{1,2}\s*月\s*\d{1,2}\s*日(?:\(.+?\))?\s*\d{1,2}\s*:\s*\d{2}/g
+    )
+  );
+
+  if (fallbackMatches.length > 0) {
+    return `${fallbackMatches[fallbackMatches.length - 1][0].trim()} 終了予定`;
+  }
+
+  return text;
 }
 
 function toBoolean(value) {
@@ -1561,18 +1606,4 @@ function cleanBroadcastLabel(value) {
   );
 
   return match ? match[0].trim() : '';
-}
-
-function cleanEndLabel(value) {
-  const text = normalizeForParse(value);
-
-  if (!text || !isEndLabel(text)) {
-    return '';
-  }
-
-  const match = text.match(
-    /(?:\d{4}年)?\s*\d{1,2}\s*月\s*\d{1,2}\s*日(?:\(.+?\))?\s*\d{1,2}\s*:\s*\d{2}\s*終了予定/
-  );
-
-  return match ? match[0].trim() : text;
 }
