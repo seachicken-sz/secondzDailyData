@@ -609,7 +609,7 @@ async function captureEpisodesForProgram(page, program) {
   }
 
   const episodes = targetRawEpisodes
-    .map((episode, filteredIndex) => {
+    .map((episode) => {
       const href = episode.href;
       const rawEpisodeTitle = String(episode.title || '').trim();
 
@@ -661,10 +661,8 @@ async function captureEpisodesForProgram(page, program) {
         end_at: parseEndAt(endLabel),
         end_flag: false,
 
-        // title_prefix_filter_flag = TRUE の場合は、
-        // 前方一致で残った中の最上位だけ TRUE。
-        // FALSE/空欄の場合は従来通り、一覧最上位だけ TRUE。
-        new_flag: filteredIndex === 0,
+        // 下で放送日基準の最新話だけ TRUE に差し替える。
+        new_flag: false,
 
         series_url: programUrl,
         members: program.members || '',
@@ -680,7 +678,51 @@ async function captureEpisodesForProgram(page, program) {
         episode.broadcast_label
       );
     });
+  // episodesの並び順は変えない。
+  // new_flagを付ける対象だけ、
+  // 「放送日が新しい順 → 同日なら本編一覧で後ろ」を基準に選ぶ。
+  const sourceIndexByEpisodeId = new Map(
+    targetRawEpisodes.map((episode) => [
+      extractEpisodeIdFromHref(episode.href),
+      Number(episode.index) || 0,
+    ])
+  );
 
+  const latestEpisodeId = episodes
+    .map((episode) => {
+      const broadcastDateParts = parseBroadcastDateParts(
+        episode.broadcast_label
+      );
+
+      if (!broadcastDateParts) {
+        return null;
+      }
+
+      return {
+        episodeId: episode.episode_id,
+        broadcastDateSortKey:
+          `${broadcastDateParts.year}-` +
+          `${pad2(broadcastDateParts.month)}-` +
+          pad2(broadcastDateParts.day),
+        sourceIndex:
+          sourceIndexByEpisodeId.get(episode.episode_id) ?? -1,
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => {
+      if (a.broadcastDateSortKey !== b.broadcastDateSortKey) {
+        return b.broadcastDateSortKey.localeCompare(
+          a.broadcastDateSortKey
+        );
+      }
+
+      // 同じ放送日なら、本編一覧で後にある方を優先する。
+      return b.sourceIndex - a.sourceIndex;
+    })[0]?.episodeId || '';
+
+  episodes.forEach((episode) => {
+    episode.new_flag = episode.episode_id === latestEpisodeId;
+  });
   return {
     episodes,
     rawEpisodeCount: rawEpisodes.length,
