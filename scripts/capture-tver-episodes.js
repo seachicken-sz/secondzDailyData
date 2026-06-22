@@ -463,6 +463,35 @@ function createEmptyMemberFlags() {
   };
 }
 
+const TALENT_NAME_TO_MEMBER_KEY = {
+  '佐藤勝利': 'sato',
+  '菊池風磨': 'kikuchi',
+  '松島聡': 'matsushima',
+  '寺西拓人': 'teranishi',
+  '原嘉孝': 'hara',
+  '橋本将生': 'hashimoto',
+  '猪俣周杜': 'inomata',
+  '篠塚大輝': 'shinozuka',
+};
+
+function getMemberKeyFromTalentName(talentName) {
+  return TALENT_NAME_TO_MEMBER_KEY[normalizeText(talentName)] || '';
+}
+
+function mergeDetectedMemberFlags(episodes) {
+  const memberFlags = createEmptyMemberFlags();
+
+  (episodes || []).forEach((episode) => {
+    const memberKey = getMemberKeyFromTalentName(episode.talent_name);
+
+    if (memberKey) {
+      memberFlags[memberKey] = true;
+    }
+  });
+
+  return memberFlags;
+}
+
 async function fetchProgramsFromGas() {
   const url = new URL(GAS_WEB_APP_URL);
 
@@ -1177,6 +1206,7 @@ async function captureEpisodesForTalent(page, talent) {
   console.log(`  raw talent episodes: ${rawItems.length}`);
 
   const episodes = [];
+  let hasFailure = false;
 
   for (const item of rawItems) {
     try {
@@ -1203,14 +1233,17 @@ async function captureEpisodesForTalent(page, talent) {
       }
 
       episodes.push(episode);
-
     } catch (error) {
+      hasFailure = true;
       console.error(`Failed talent episode detail: ${talent.name} / ${item.href}`);
       console.error(error);
     }
   }
 
-  return episodes;
+  return {
+    episodes,
+    hasFailure,
+  };
 }
 
 function collectTalentNamesFromEpisodes(episodes) {
@@ -1408,6 +1441,7 @@ async function postEpisodesToGas({
   searchedProgramUrls,
   programSearchCompleted,
   talentSearchCompleted,
+  talentSearchEpisodes,
 }) {
   const response = await fetch(GAS_WEB_APP_URL, {
     method: 'POST',
@@ -1423,6 +1457,10 @@ async function postEpisodesToGas({
       searchedProgramUrls,
       programSearchCompleted,
       talentSearchCompleted,
+
+      // episode_masterには保存しない。
+      // GAS側でprogram_masterの出演者更新・新規番組追加だけに使う。
+      talentSearchEpisodes,
     }),
   });
 
@@ -1445,9 +1483,9 @@ async function postEpisodesToGas({
 
 /**
  * talent検索で見つけた未登録番組を、
- * 同一実行内のprogram_master検索対象へ追加する。
+ * 同一実行内の番組ページ取得対象へ追加する。
  *
- * 実際のprogram_master更新は最後のGAS POSTで行う。
+ * members / memberFlags の決定はGASの責務。
  */
 function buildProgramsForCrawl(basePrograms, talentEpisodes) {
   const programsByUrl = new Map();
@@ -1462,6 +1500,8 @@ function buildProgramsForCrawl(basePrograms, talentEpisodes) {
     programsByUrl.set(seriesUrl, program);
   });
 
+  const discoveredByUrl = new Map();
+
   (talentEpisodes || []).forEach((episode) => {
     const seriesUrl = normalizeUrlWithoutParams(episode.series_url);
     const programTitle = normalizeText(episode.program_title);
@@ -1470,33 +1510,45 @@ function buildProgramsForCrawl(basePrograms, talentEpisodes) {
       return;
     }
 
-    // 既存program_masterにある番組は、その設定値を優先する。
+    // 既存program_masterにある番組は、そのまま既存設定で番組ページを取得する。
     if (programsByUrl.has(seriesUrl)) {
       return;
     }
 
-    programsByUrl.set(seriesUrl, {
-      url: seriesUrl,
-      title: programTitle,
+    if (!discoveredByUrl.has(seriesUrl)) {
+      discoveredByUrl.set(seriesUrl, {
+        url: seriesUrl,
+        title: programTitle,
+      });
+    }
+  });
 
-      // talent検索起点で追加した番組は、初期値として扱う。
+  const discoveredPrograms = Array.from(
+    discoveredByUrl.values()
+  ).map((discovered) => {
+    return {
+      url: discovered.url,
+      title: discovered.title,
+
+      // 番組ページ取得用の暫定値。
+      // 出演者情報の確定・program_master更新はGASだけで行う。
       active_flag: true,
       work_flag: true,
       rank_flag: false,
-
-      // 番組名先頭一致が必要な番組だけ、後からprogram_masterでTRUEにする。
       title_prefix_filter_flag: false,
-
-      // 空でもnew_flag判定には影響しない。
       week: '',
       time: '',
-
       members: '',
       memberFlags: createEmptyMemberFlags(),
-    });
+
+      _isNewTalentProgram: true,
+    };
   });
 
-  return Array.from(programsByUrl.values());
+  return [
+    ...(basePrograms || []),
+    ...discoveredPrograms,
+  ];
 }
 
 async function main() {
@@ -1520,21 +1572,71 @@ async function main() {
 
   const page = await browser.newPage();
 
-  const allEpisodes = [];
+  // episode_masterへ送るのは番組ページ由来だけ。
+  const programPageEpisodes = [];
+
+  // talent検索由来。GASのprogram_master更新専用で、episode_masterへは保存しない。
+  const talentSearchEpisodes = [];
+
   const crawledSeriesUrls = [];
   const noEpisodeSeriesUrls = [];
 
-  // 今回program_master起点で検索対象にしたURL一覧。
-  // GAS側で「検索対象だったが取得できなかった番組」の判定に使う。
+  // 既存program_masterだけを終了・active判定の対象にする。
   const searchedProgramUrls = programs
     .map((program) => normalizeUrlWithoutParams(program.url))
     .filter(Boolean);
 
   let programSearchCompleted = false;
   let talentSearchCompleted = false;
+  let talentSearchFailed = false;
 
   try {
-    for (const program of programs) {
+    // 1. talent検索を先に実行する。
+    for (const talent of talents) {
+      try {
+        console.log(`Capture talent: ${talent.name} / ${talent.url}`);
+
+        const captureResult = await captureEpisodesForTalent(page, talent);
+        const episodes = captureResult.episodes || [];
+
+        console.log(`  talent episodes: ${episodes.length}`);
+
+        if (captureResult.hasFailure) {
+          talentSearchFailed = true;
+        }
+
+        // episode_master送信配列には入れない。
+        talentSearchEpisodes.push(...episodes);
+      } catch (error) {
+        talentSearchFailed = true;
+        console.error(`Failed talent: ${talent.name} / ${talent.url}`);
+        console.error(error);
+      }
+    }
+
+    /*
+     * 一部でもtalent検索が失敗した場合は、
+     * GASで「今回検出されなかった」ことを根拠に
+     * work_flagをFALSEへ更新しない。
+     */
+    talentSearchCompleted = !talentSearchFailed;
+
+    // 2. 既存program_master + talent検索で見つけた未登録番組を作る。
+    const programsForCrawl = buildProgramsForCrawl(
+      programs,
+      talentSearchEpisodes
+    );
+
+    const discoveredProgramCount = programsForCrawl.filter((program) => {
+      return program._isNewTalentProgram;
+    }).length;
+
+    console.log(
+      `New programs discovered from talent search: ${discoveredProgramCount}`
+    );
+
+    // 3. 番組ページからepisodeを取得する。
+    for (const program of programsForCrawl) {
       try {
         console.log(`Capture program: ${program.title} / ${program.url}`);
 
@@ -1547,19 +1649,22 @@ async function main() {
         );
         console.log(`  episodes: ${episodes.length}`);
 
-        allEpisodes.push(...episodes);
+        // episode_masterへ送るのは番組ページ由来だけ。
+        programPageEpisodes.push(...episodes);
 
         const normalizedProgramUrl = normalizeUrlWithoutParams(program.url);
+        const isExistingProgram = !program._isNewTalentProgram;
 
-        // 掲載終了判定に使う。
-        // 保存対象episodeが1件以上あるときだけ、既存episodeの終了判定に使う。
-        if (episodes.length > 0) {
+        // 既存program_masterだけを既存episode終了判定の対象にする。
+        if (isExistingProgram && episodes.length > 0) {
           crawledSeriesUrls.push(normalizedProgramUrl);
         }
 
-        // active_flag FALSE判定に使う。
-        // 番組ページの本編エピソードが0件だった場合だけ入れる。
-        if (captureResult.rawEpisodeCount === 0) {
+        // 既存program_masterだけをactive_flag FALSE判定の対象にする。
+        if (
+          isExistingProgram &&
+          captureResult.rawEpisodeCount === 0
+        ) {
           noEpisodeSeriesUrls.push(normalizedProgramUrl);
         }
       } catch (error) {
@@ -1570,101 +1675,83 @@ async function main() {
 
     programSearchCompleted = true;
 
-    for (const talent of talents) {
-      try {
-        console.log(`Capture talent: ${talent.name} / ${talent.url}`);
+    const episodesForPost = mergeEpisodesBeforePost(
+      programPageEpisodes
+    );
 
-        const episodes = await captureEpisodesForTalent(page, talent);
+    console.log(
+      `ProgramPageEpisodesBeforeMerge: ${programPageEpisodes.length}`
+    );
+    console.log(`MergedEpisodesForPost: ${episodesForPost.length}`);
+    console.log(`TalentSearchEpisodesForPost: ${talentSearchEpisodes.length}`);
+    console.log(`TalentSearchCompleted: ${talentSearchCompleted}`);
 
-        console.log(`  talent episodes: ${episodes.length}`);
+    const uniqueCrawledSeriesUrls = Array.from(
+      new Set(crawledSeriesUrls)
+    );
 
-        allEpisodes.push(...episodes);
+    const uniqueNoEpisodeSeriesUrls = Array.from(
+      new Set(noEpisodeSeriesUrls)
+    );
 
-        // 重要:
-        // 出演者検索由来のseries_urlはcrawledSeriesUrlsに入れない。
-        // 出演者検索は番組ページの全episode一覧ではないため、
-        // 掲載終了判定に使うとend_flag誤爆の原因になる。
-      } catch (error) {
-        console.error(`Failed talent: ${talent.name} / ${talent.url}`);
-        console.error(error);
-      }
+    console.log(JSON.stringify(episodesForPost, null, 2));
+
+    const result = await postEpisodesToGas({
+      episodes: episodesForPost,
+      crawledSeriesUrls: uniqueCrawledSeriesUrls,
+      noEpisodeSeriesUrls: uniqueNoEpisodeSeriesUrls,
+      searchedProgramUrls,
+      programSearchCompleted,
+      talentSearchCompleted,
+      talentSearchEpisodes,
+    });
+
+    console.log(`Total: ${result.total}`);
+    console.log(`Appended: ${result.appended}`);
+    console.log(`Updated: ${result.updated}`);
+    console.log(`Ended: ${result.ended}`);
+
+    if (result.appendedPrograms !== undefined) {
+      console.log(`AppendedPrograms: ${result.appendedPrograms}`);
     }
 
-    talentSearchCompleted = true;
+    if (result.activatedPrograms !== undefined) {
+      console.log(`ActivatedPrograms: ${result.activatedPrograms}`);
+    }
+
+    if (result.workActivatedPrograms !== undefined) {
+      console.log(`WorkActivatedPrograms: ${result.workActivatedPrograms}`);
+    }
+
+    if (result.workDisabledPrograms !== undefined) {
+      console.log(`WorkDisabledPrograms: ${result.workDisabledPrograms}`);
+    }
+
+    if (result.activeDisabledPrograms !== undefined) {
+      console.log(`ActiveDisabledPrograms: ${result.activeDisabledPrograms}`);
+    }
+
+    if (result.memberUpdatedPrograms !== undefined) {
+      console.log(`MemberUpdatedPrograms: ${result.memberUpdatedPrograms}`);
+    }
+
+    if (result.sentToTarget !== undefined) {
+      console.log(`SentToTarget: ${result.sentToTarget}`);
+    }
+
+    if (result.updatedTargetExisting !== undefined) {
+      console.log(`UpdatedTargetExisting: ${result.updatedTargetExisting}`);
+    }
+
+    if (result.skippedAlreadyExists !== undefined) {
+      console.log(`SkippedAlreadyExists: ${result.skippedAlreadyExists}`);
+    }
+
+    if (result.skippedNotNew !== undefined) {
+      console.log(`SkippedNotNew: ${result.skippedNotNew}`);
+    }
   } finally {
     await browser.close();
-  }
-
-  // episode_id単位で統合してからGASへ送る。
-  // program_master由来があれば、番組名・エピソード名・日時・new_flagを優先する。
-  // talent_search由来は、主に出演者情報の補強に使う。
-  const episodesForPost = mergeEpisodesBeforePost(allEpisodes);
-
-  console.log(`RawEpisodesBeforeMerge: ${allEpisodes.length}`);
-  console.log(`MergedEpisodesForPost: ${episodesForPost.length}`);
-
-  const uniqueCrawledSeriesUrls = Array.from(
-    new Set(crawledSeriesUrls)
-  );
-
-  const uniqueNoEpisodeSeriesUrls = Array.from(
-    new Set(noEpisodeSeriesUrls)
-  );
-
-  console.log(JSON.stringify(episodesForPost, null, 2));
-
-  const result = await postEpisodesToGas({
-    episodes: episodesForPost,
-    crawledSeriesUrls: uniqueCrawledSeriesUrls,
-    noEpisodeSeriesUrls: uniqueNoEpisodeSeriesUrls,
-    searchedProgramUrls,
-    programSearchCompleted,
-    talentSearchCompleted,
-  });
-
-  console.log(`Total: ${result.total}`);
-  console.log(`Appended: ${result.appended}`);
-  console.log(`Updated: ${result.updated}`);
-  console.log(`Ended: ${result.ended}`);
-
-  if (result.appendedPrograms !== undefined) {
-    console.log(`AppendedPrograms: ${result.appendedPrograms}`);
-  }
-
-  if (result.activatedPrograms !== undefined) {
-    console.log(`ActivatedPrograms: ${result.activatedPrograms}`);
-  }
-
-  if (result.workActivatedPrograms !== undefined) {
-    console.log(`WorkActivatedPrograms: ${result.workActivatedPrograms}`);
-  }
-
-  if (result.workDisabledPrograms !== undefined) {
-    console.log(`WorkDisabledPrograms: ${result.workDisabledPrograms}`);
-  }
-
-  if (result.activeDisabledPrograms !== undefined) {
-    console.log(`ActiveDisabledPrograms: ${result.activeDisabledPrograms}`);
-  }
-
-  if (result.memberUpdatedPrograms !== undefined) {
-    console.log(`MemberUpdatedPrograms: ${result.memberUpdatedPrograms}`);
-  }
-
-  if (result.sentToTarget !== undefined) {
-    console.log(`SentToTarget: ${result.sentToTarget}`);
-  }
-
-  if (result.updatedTargetExisting !== undefined) {
-    console.log(`UpdatedTargetExisting: ${result.updatedTargetExisting}`);
-  }
-
-  if (result.skippedAlreadyExists !== undefined) {
-    console.log(`SkippedAlreadyExists: ${result.skippedAlreadyExists}`);
-  }
-
-  if (result.skippedNotNew !== undefined) {
-    console.log(`SkippedNotNew: ${result.skippedNotNew}`);
   }
 }
 
