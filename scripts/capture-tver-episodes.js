@@ -718,36 +718,43 @@ async function captureEpisodesForProgram(page, program) {
   );
 
   const latestEpisodeId = episodes
-    .map((episode) => {
-      const broadcastDateParts = parseBroadcastDateParts(
-        episode.broadcast_label
+  .filter((episode) => {
+    const episodeTitle = normalizeText(episode.episode_title);
+
+    // 解説放送版はepisode_masterには残すが、
+    // new_flagを付ける最新話候補からは除外する。
+    return !episodeTitle.includes('【解説放送版】');
+  })
+  .map((episode) => {
+    const broadcastDateParts = parseBroadcastDateParts(
+      episode.broadcast_label
+    );
+
+    if (!broadcastDateParts) {
+      return null;
+    }
+
+    return {
+      episodeId: episode.episode_id,
+      broadcastDateSortKey:
+        `${broadcastDateParts.year}-` +
+        `${pad2(broadcastDateParts.month)}-` +
+        pad2(broadcastDateParts.day),
+      sourceIndex:
+        sourceIndexByEpisodeId.get(episode.episode_id) ?? -1,
+    };
+  })
+  .filter(Boolean)
+  .sort((a, b) => {
+    if (a.broadcastDateSortKey !== b.broadcastDateSortKey) {
+      return b.broadcastDateSortKey.localeCompare(
+        a.broadcastDateSortKey
       );
+    }
 
-      if (!broadcastDateParts) {
-        return null;
-      }
-
-      return {
-        episodeId: episode.episode_id,
-        broadcastDateSortKey:
-          `${broadcastDateParts.year}-` +
-          `${pad2(broadcastDateParts.month)}-` +
-          pad2(broadcastDateParts.day),
-        sourceIndex:
-          sourceIndexByEpisodeId.get(episode.episode_id) ?? -1,
-      };
-    })
-    .filter(Boolean)
-    .sort((a, b) => {
-      if (a.broadcastDateSortKey !== b.broadcastDateSortKey) {
-        return b.broadcastDateSortKey.localeCompare(
-          a.broadcastDateSortKey
-        );
-      }
-
-      // 同じ放送日なら、本編一覧で後にある方を優先する。
-      return b.sourceIndex - a.sourceIndex;
-    })[0]?.episodeId || '';
+    // 同じ放送日なら、本編一覧で後にある方を優先する。
+    return b.sourceIndex - a.sourceIndex;
+  })[0]?.episodeId || '';
 
   episodes.forEach((episode) => {
     episode.new_flag = episode.episode_id === latestEpisodeId;
