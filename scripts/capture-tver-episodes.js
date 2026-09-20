@@ -926,16 +926,45 @@ async function captureEpisodeLinksFromTalentSearchPage(page, talent) {
 }
 
 /**
+ * エピソード詳細ページを最大2回まで読み込む。
+ */
+async function gotoEpisodePageWithRetry(page, episodeUrl) {
+  const maxAttempts = 2;
+  let lastError;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      await page.goto(episodeUrl, {
+        waitUntil: 'domcontentloaded',
+        timeout: 60000,
+      });
+
+      return;
+    } catch (error) {
+      lastError = error;
+
+      console.warn(
+        `Episode page load failed (${attempt}/${maxAttempts}): ${episodeUrl}`,
+        error.message
+      );
+
+      if (attempt < maxAttempts) {
+        await page.waitForTimeout(3000);
+      }
+    }
+  }
+
+  throw lastError;
+}
+
+/**
  * 出演者検索結果だけではseries_urlが不足しやすいので、
  * episodeページへ入り、「番組TOPへ」リンクからseries_urlを補完する。
  */
 async function captureEpisodeDetailFromEpisodePage(page, episodeUrl) {
   const normalizedEpisodeUrl = normalizeUrlWithoutParams(episodeUrl);
 
-  await page.goto(normalizedEpisodeUrl, {
-    waitUntil: 'networkidle',
-    timeout: 60000,
-  });
+  await gotoEpisodePageWithRetry(page, normalizedEpisodeUrl);
 
   await page.waitForTimeout(1500);
 
