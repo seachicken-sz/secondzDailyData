@@ -541,7 +541,9 @@ async function fetchTalentsFromGas() {
 }
 
 /**
- * program_master側の番組URLから、本編episodeを取得する。
+ * program_master側の番組URLから、指定シーズンのepisodeを取得する。
+ * season_nameが空の場合は「本編」を対象にする。
+ * 複数指定する場合は「|」区切りにする。
  */
 async function captureEpisodesForProgram(page, program) {
   const programUrl = normalizeUrlWithoutParams(program.url);
@@ -553,54 +555,116 @@ async function captureEpisodesForProgram(page, program) {
 
   await page.waitForTimeout(1500);
 
-  const rawEpisodes = await page.evaluate(() => {
+  const requestedSeasonNames = String(program.season_name || '本編')
+    .split('|')
+    .map(normalizeText)
+    .filter(Boolean);
+
+  const seasonCaptureResult = await page.evaluate((seasonNames) => {
+    const normalizeSeasonTitle = (value) => {
+      return String(value || '')
+        .replace(/\s+/g, ' ')
+        .trim();
+    };
+
     const seasonBlocks = Array.from(
       document.querySelectorAll('[class*="SeasonEpisodeList_season"]')
-    );
+    )
+      .map((block) => {
+        const title = normalizeSeasonTitle(
+          block
+            .querySelector('[class*="SeasonEpisodeList_title"]')
+            ?.textContent
+        );
 
-    const mainSeasonBlock = seasonBlocks.find((block) => {
-      const title = block
-        .querySelector('[class*="SeasonEpisodeList_title"]')
-        ?.textContent
-        ?.trim();
+        return {
+          block,
+          title,
+        };
+      })
+      // 「すべて」を内包するタイトルなしの親ブロックを除外する。
+      .filter((item) => item.title);
 
-      return title === '本編';
+    const availableSeasonNames = seasonBlocks.map((item) => item.title);
+
+    const targetSeasonBlocks = seasonBlocks.filter((item) => {
+      return seasonNames.includes(item.title);
     });
 
-    if (!mainSeasonBlock) {
-      return [];
-    }
+    const matchedSeasonNames = targetSeasonBlocks.map((item) => item.title);
+    const uniqueLinks = new Map();
 
-    const links = Array.from(
-      mainSeasonBlock.querySelectorAll('a[href^="/episodes/"]')
-    );
+    targetSeasonBlocks.forEach((item) => {
+      const links = Array.from(
+        item.block.querySelectorAll('a[href^="/episodes/"]')
+      );
 
-    return links.map((link, index) => {
-      const href = link.getAttribute('href') || '';
+      links.forEach((link) => {
+        const rawHref = link.getAttribute('href') || '';
+        const href = rawHref
+          .split('#')[0]
+          .split('?')[0];
 
-      const title =
-        link.querySelector('[class*="EpisodeListItem_title"]')?.textContent ||
-        link.querySelector('[class*="EpisodeCard_title"]')?.textContent ||
-        link.querySelector('[class*="Title_root"]')?.textContent ||
-        '';
-      
-      const subInfoTexts = Array.from(
-        link.querySelectorAll(
-          [
-            '[class*="EpisodeListItem_subInfo"]',
-            '[class*="SubInfo_root"]'
-          ].join(',')
-        )
-      ).map((element) => element.textContent || '');
+        if (!href || uniqueLinks.has(href)) {
+          return;
+        }
 
-      return {
-        href,
-        title,
-        subInfoTexts,
-        index,
-      };
+        const title =
+          link.querySelector('[class*="EpisodeListItem_title"]')?.textContent ||
+          link.querySelector('[class*="EpisodeCard_title"]')?.textContent ||
+          link.querySelector('[class*="Title_root"]')?.textContent ||
+          '';
+
+        const subInfoTexts = Array.from(
+          link.querySelectorAll(
+            [
+              '[class*="EpisodeListItem_subInfo"]',
+              '[class*="SubInfo_root"]',
+            ].join(',')
+          )
+        ).map((element) => element.textContent || '');
+
+        uniqueLinks.set(href, {
+          href,
+          title,
+          subInfoTexts,
+          index: uniqueLinks.size,
+          seasonName: item.title,
+        });
+      });
     });
+
+    return {
+      episodes: Array.from(uniqueLinks.values()),
+      availableSeasonNames,
+      matchedSeasonNames,
+    };
+  }, requestedSeasonNames);
+
+  console.log({
+    source: 'program_master',
+    program: program.title,
+    requestedSeasonNames,
+    availableSeasonNames: seasonCaptureResult.availableSeasonNames,
+    matchedSeasonNames: seasonCaptureResult.matchedSeasonNames,
+    rawEpisodes: seasonCaptureResult.episodes.length,
   });
+
+  /*
+   * 指定シーズンが存在しない場合は、通常のepisode 0件として扱わない。
+   * 0件扱いにすると、GAS側でactive_flagがFALSEになる可能性がある。
+   */
+  if (seasonCaptureResult.matchedSeasonNames.length === 0) {
+    throw new Error(
+      [
+        `Season block not found: ${program.title}`,
+        `requested=${requestedSeasonNames.join(' | ')}`,
+        `available=${seasonCaptureResult.availableSeasonNames.join(' | ')}`,
+      ].join(', ')
+    );
+  }
+
+  const rawEpisodes = seasonCaptureResult.episodes;
 
   const useTitlePrefixFilter = toBoolean(program.title_prefix_filter_flag);
   const programTitle = normalizeText(program.title);
@@ -1543,6 +1607,7 @@ function buildProgramsForCrawl(basePrograms, talentEpisodes) {
       work_flag: true,
       rank_flag: false,
       title_prefix_filter_flag: false,
+      season_name: '本編',
       week: '',
       time: '',
       members: '',
