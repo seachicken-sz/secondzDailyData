@@ -25,6 +25,40 @@ function buildTitleIndex(targets) {
   return index;
 }
 
+// 見出しの外側の「作品名」または『作品名』を抽出する。
+// 入れ子の引用符を含む作品名も、途中で切らずに保持する。
+function extractHeadingTitles(value) {
+  const pairs = { "「": "」", "『": "』" };
+  const stack = [];
+  const titles = [];
+  let start = -1;
+  const text = String(value || "");
+  for (let i = 0; i < text.length; i++) {
+    const char = text[i];
+    if (pairs[char]) {
+      if (!stack.length) start = i + 1;
+      stack.push(pairs[char]);
+    } else if (stack.length && char === stack[stack.length - 1]) {
+      stack.pop();
+      if (!stack.length) {
+        const title = text.slice(start, i).trim();
+        if (title) titles.push(title);
+      }
+    }
+  }
+  return [...new Set(titles)];
+}
+
+function detectSaleStatus(text, label, purchase) {
+  // 「売り切れ次第終了」は完売ではない。
+  if (/完売しました|チケットは完売|完売御礼|完売いたしました|満員御礼|売り切れました/.test(text) ||
+      /(?:^|\s)(?:完売|売り切れ)(?:$|\s)/.test(text)) return "完売";
+  if (purchase) return "販売中";
+  if (/販売開始|販売間近/.test(label + text)) return "販売前";
+  if (/販売終了|募集終了|受付終了/.test(text) && !/販売終了まで/.test(label)) return "販売終了";
+  return "要確認";
+}
+
 async function callGas(action, extra = {}) {
   const response = await fetch(WEB_APP_URL, {
     method: "POST",
@@ -118,7 +152,7 @@ async function readListing(page, url) {
 
 async function readEvent(page, eventId, url) {
   await openPage(page, url);
-  return page.evaluate(({ eventId, url }) => {
+  const result = await page.evaluate(({ eventId, url }) => {
     const root = document.querySelector(".main");
     const box = root.querySelector(".leftTicket");
     const eventTitle = [...root.querySelectorAll("h1")]
@@ -127,9 +161,10 @@ async function readEvent(page, eventId, url) {
       .filter(el => /^\/m\d+\/?$/.test(new URL(el.href).pathname))
       .map(el => (el.textContent || "").trim()).filter(Boolean);
 
-    if (!box || !eventTitle || !titles.length) {
-      throw new Error("イベントの上映作品・チケット情報を取得できません: " + url);
+    if (!box || !eventTitle) {
+      throw new Error("イベント見出しまたはチケット情報がありません: " + url);
     }
+
 
     const text = (box.innerText || "").replace(/\s+/g, " ");
     const purchase = [...box.querySelectorAll("a[href]")].some(el =>
@@ -137,13 +172,7 @@ async function readEvent(page, eventId, url) {
       el.getClientRects().length > 0
     );
     const label = box.querySelector(".hCount")?.textContent || "";
-    let saleStatus = "要確認";
-    if (/完売|売り切れ/.test(text)) saleStatus = "完売";
-    else if (/販売開始|販売間近/.test(label + text)) saleStatus = "販売前";
-    else if (purchase) saleStatus = "販売中";
-    else if (/販売終了|募集終了|受付終了/.test(text) && !/販売終了まで/.test(label)) {
-      saleStatus = "販売終了";
-    }
+    // 販売状態はNode側で判定する。
 
     const pending = [...box.querySelectorAll(".pending, .btn")]
       .map(el => (el.textContent || "").trim());
@@ -161,10 +190,22 @@ async function readEvent(page, eventId, url) {
       url,
       theater,
       startAt,
-      saleStatus,
+      statusText: text,
+      statusLabel: label,
+      purchase,
       screeningStatus
     };
   }, { eventId, url });
+
+  if (!result.titles.length) {
+    result.titles = extractHeadingTitles(result.eventTitle);
+    if (!result.titles.length) {
+      throw new Error("見出しから作品名を抽出できません: " + url);
+    }
+    console.log("見出しの作品名で照合: " + result.titles.join(" / "));
+  }
+  const { statusText, statusLabel, purchase, ...event } = result;
+  return { ...event, saleStatus: detectSaleStatus(statusText, statusLabel, purchase) };
 }
 
 async function main() {
@@ -232,4 +273,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { titleKey, buildTitleIndex, readListing, readEvent, main };
+module.exports = { titleKey, buildTitleIndex, extractHeadingTitles, detectSaleStatus, readListing, readEvent, main };
