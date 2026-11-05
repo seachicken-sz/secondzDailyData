@@ -1,9 +1,6 @@
 name: Capture Dreampass
 
 on:
-  schedule:
-    # UTC 00:00 / 12:00 = 日本時間 09:00 / 21:00
-    - cron: "0 0,12 * * *"
   workflow_dispatch:
 
 permissions:
@@ -25,16 +22,17 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "22"
+          node-version: '24'
+          check-latest: true
 
-      - name: Install Playwright
-        run: npm install --no-save --package-lock=false --ignore-scripts playwright@1.56.1
+      - name: Install dependencies
+        run: npm install
 
-      - name: Install Chromium
+      - name: Install Playwright Chromium
         run: npx playwright install --with-deps chromium
 
-      - name: Capture and update spreadsheet
+      - name: Capture Dreampass
         env:
           DREAMPASS_WEB_APP_URL: ${{ secrets.DREAMPASS_WEB_APP_URL }}
-          DREAMPASS_SYNC_TOKEN: ${{ secrets.DREAMPASS_SYNC_TOKEN }}
+          DREAMPASS_SYNC_TOKEN: ${{ secrets.GAS_WEB_APP_TOKEN }}
         run: node scripts/capture-dreampass.js
