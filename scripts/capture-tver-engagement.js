@@ -192,14 +192,55 @@ async function captureEpisodeLike(page, episode) {
 
   await waitForPageReady(page, episode.url);
 
+  // いいねボタンまたは明示的な公開期間外表示を待つ。
+  // DOMの欠落・タイムアウトだけでは終了扱いにしない。
+  const stateHandle = await page.waitForFunction(() => {
+    const isVisible = (element) => {
+      if (!element) return false;
+      const style = window.getComputedStyle(element);
+      return style.display !== 'none' &&
+        style.visibility !== 'hidden' &&
+        style.visibility !== 'collapse' &&
+        element.getClientRects().length > 0;
+    };
+    const closed = Array.from(
+      document.querySelectorAll('[class*="ClosedContent_message"]')
+    ).some((element) =>
+      isVisible(element) && (element.textContent || '').includes('公開期間外です。')
+    );
+    if (closed) return 'closed';
+    return isVisible(document.querySelector(
+      'button[aria-label="いいね登録"] [class*="IconButton_label"]'
+    )) ? 'like' : false;
+  }, null, { timeout: 30000 });
+
+  let state;
+  try {
+    state = await stateHandle.jsonValue();
+  } finally {
+    await stateHandle.dispose();
+  }
+
+  if (state === 'closed') {
+    const currentUrl = new URL(page.url());
+    if (
+      currentUrl.origin !== 'https://tver.jp' ||
+      currentUrl.pathname.split('/').filter(Boolean).join('/') !== `episodes/${episode.episodeId}`
+    ) {
+      throw new Error('Closed page does not match requested episode');
+    }
+    return {
+      programId: episode.programId,
+      episodeId: episode.episodeId,
+      url: episode.url,
+      reason: 'outside_publication_period',
+      endFlag: true,
+    };
+  }
+
   const locator = page
     .locator('button[aria-label="いいね登録"] [class*="IconButton_label"]')
     .first();
-
-  await locator.waitFor({
-    state: 'visible',
-    timeout: 30000,
-  });
 
   const likeText = normalizeText(await locator.innerText());
   const likeCount = parseJapaneseCountText(likeText);
@@ -260,6 +301,11 @@ async function safeCaptureProgram(page, program) {
 async function safeCaptureEpisode(page, episode) {
   try {
     const item = await captureEpisodeLike(page, episode);
+
+    if (item.endFlag === true) {
+      console.log(`[CLOSED] episode ${item.episodeId}: 公開期間外です。`);
+      return { item: null, endedEpisode: item, error: null };
+    }
 
     console.log(
       `[OK] episode ${item.episodeId}: like=${item.likeCount} text=${item.likeText}`
@@ -332,6 +378,7 @@ async function main() {
 
   const programFavorites = [];
   const episodeLikes = [];
+  const endedEpisodes = [];
   const errors = [];
 
   for (const program of targets.programs) {
@@ -353,6 +400,10 @@ async function main() {
       episodeLikes.push(result.item);
     }
 
+    if (result.endedEpisode) {
+      endedEpisodes.push(result.endedEpisode);
+    }
+
     if (result.error) {
       errors.push(result.error);
     }
@@ -360,13 +411,14 @@ async function main() {
 
   await browser.close();
 
-  const successCount = programFavorites.length + episodeLikes.length;
+  const successCount = programFavorites.length + episodeLikes.length + endedEpisodes.length;
 
   await postResultToGas({
     capturedAt,
     captureHourKey,
     programFavorites,
     episodeLikes,
+    endedEpisodes,
     errors,
   });
 
@@ -376,6 +428,7 @@ async function main() {
       {
         programFavorites: programFavorites.length,
         episodeLikes: episodeLikes.length,
+        endedEpisodes: endedEpisodes.length,
         errors: errors.length,
       },
       null,
