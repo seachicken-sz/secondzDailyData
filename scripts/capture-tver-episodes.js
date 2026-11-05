@@ -639,11 +639,20 @@ async function captureEpisodesForProgram(page, program) {
     });
 
     // 明示的な配信なし表示だけを採用する。番組ページの同一性も後段で確認する。
-    const main = document.querySelector('main');
-    const mainText = normalizeSeasonTitle(main?.innerText);
-    const hasNoEpisodeMessage =
-      /(?:現在[、,]?\s*)?配信中の(?:エピソード|動画|コンテンツ|番組)はありません[。．]?/.test(mainText) ||
-      /現在[、,]?\s*(?:配信している|配信されている)(?:エピソード|動画|コンテンツ|番組)はありません[。．]?/.test(mainText);
+    const hasNoEpisodeMessage = Array.from(
+      document.querySelectorAll('[class*="SeasonEpisodeList_contentEmpty"]')
+    ).some((element) => {
+      const style = window.getComputedStyle(element);
+      const isVisible =
+        style.display !== 'none' &&
+        style.visibility !== 'hidden' &&
+        style.visibility !== 'collapse' &&
+        element.getClientRects().length > 0;
+      const message = normalizeSeasonTitle(
+        element.querySelector('[class*="SeasonEpisodeList_mainText"]')?.textContent
+      );
+      return isVisible && message === '配信中のエピソードがありません';
+    });
     const canonicalUrl =
       document.querySelector('link[rel="canonical"]')?.href ||
       document.querySelector('meta[property="og:url"]')?.content || '';
@@ -678,6 +687,10 @@ async function captureEpisodesForProgram(page, program) {
     availableSeasonNames: seasonCaptureResult.availableSeasonNames,
     matchedSeasonNames: seasonCaptureResult.matchedSeasonNames,
     rawEpisodes: seasonCaptureResult.episodes.length,
+    hasNoEpisodeMessage: seasonCaptureResult.hasNoEpisodeMessage,
+    canonicalUrl: seasonCaptureResult.canonicalUrl,
+    currentUrl: page.url(),
+    noEpisodesConfirmed,
   });
 
   // 配信なし表示が確認できれば、本編枠が消えていてもGASへ0件として通知する。
