@@ -34,5 +34,5 @@ jobs:
       - name: Capture Dreampass
         env:
           DREAMPASS_WEB_APP_URL: ${{ secrets.DREAMPASS_WEB_APP_URL }}
-          DREAMPASS_SYNC_TOKEN: ${{ secrets.GAS_WEB_APP_TOKEN }}
+          DREAMPASS_SYNC_TOKEN: ${{ secrets.DREAMPASS_SYNC_TOKEN }}
         run: node scripts/capture-dreampass.js
