@@ -548,10 +548,14 @@ async function fetchTalentsFromGas() {
 async function captureEpisodesForProgram(page, program) {
   const programUrl = normalizeUrlWithoutParams(program.url);
 
-  await page.goto(programUrl, {
+  const response = await page.goto(programUrl, {
     waitUntil: 'networkidle',
     timeout: 60000,
   });
+
+  if (!response || !response.ok()) {
+    throw new Error(`Program page request failed: ${program.title} / status=${response?.status()}`);
+  }
 
   await page.waitForTimeout(1500);
 
@@ -560,7 +564,7 @@ async function captureEpisodesForProgram(page, program) {
     .map(normalizeText)
     .filter(Boolean);
 
-  const seasonCaptureResult = await page.evaluate((seasonNames) => {
+  const readSeasonCaptureResult = () => page.evaluate((seasonNames) => {
     const normalizeSeasonTitle = (value) => {
       return String(value || '')
         .replace(/\s+/g, ' ')
@@ -634,12 +638,38 @@ async function captureEpisodesForProgram(page, program) {
       });
     });
 
+    // 明示的な配信なし表示だけを採用する。番組ページの同一性も後段で確認する。
+    const main = document.querySelector('main');
+    const mainText = normalizeSeasonTitle(main?.innerText);
+    const hasNoEpisodeMessage =
+      /(?:現在[、,]?\s*)?配信中の(?:エピソード|動画|コンテンツ|番組)はありません[。．]?/.test(mainText) ||
+      /現在[、,]?\s*(?:配信している|配信されている)(?:エピソード|動画|コンテンツ|番組)はありません[。．]?/.test(mainText);
+    const canonicalUrl =
+      document.querySelector('link[rel="canonical"]')?.href ||
+      document.querySelector('meta[property="og:url"]')?.content || '';
+
     return {
       episodes: Array.from(uniqueLinks.values()),
       availableSeasonNames,
       matchedSeasonNames,
+      hasNoEpisodeMessage,
+      canonicalUrl,
     };
   }, requestedSeasonNames);
+
+  let seasonCaptureResult = await readSeasonCaptureResult();
+
+  // 遅延描画中の空一覧でフラグを落とさないよう、0件時は再確認する。
+  if (seasonCaptureResult.episodes.length === 0) {
+    await page.waitForTimeout(5000);
+    seasonCaptureResult = await readSeasonCaptureResult();
+  }
+
+  const noEpisodesConfirmed =
+    seasonCaptureResult.episodes.length === 0 &&
+    seasonCaptureResult.hasNoEpisodeMessage &&
+    normalizeUrlWithoutParams(seasonCaptureResult.canonicalUrl) === programUrl &&
+    normalizeUrlWithoutParams(page.url()) === programUrl;
 
   console.log({
     source: 'program_master',
@@ -650,14 +680,29 @@ async function captureEpisodesForProgram(page, program) {
     rawEpisodes: seasonCaptureResult.episodes.length,
   });
 
-  /*
-   * 指定シーズンが存在しない場合は、通常のepisode 0件として扱わない。
-   * 0件扱いにすると、GAS側でactive_flagがFALSEになる可能性がある。
-   */
-  if (seasonCaptureResult.matchedSeasonNames.length === 0) {
+  // 配信なし表示が確認できれば、本編枠が消えていてもGASへ0件として通知する。
+  // 枠の欠落だけではHTML変更・読み込み不良と区別できないため更新しない。
+  if (noEpisodesConfirmed) {
+    console.log({
+      source: 'program_master',
+      program: program.title,
+      reason: 'confirmed no streaming episodes',
+    });
+    return {
+      episodes: [],
+      rawEpisodeCount: 0,
+      targetRawEpisodeCount: 0,
+      noEpisodesConfirmed: true,
+    };
+  }
+
+  if (
+    seasonCaptureResult.matchedSeasonNames.length === 0 ||
+    seasonCaptureResult.episodes.length === 0
+  ) {
     throw new Error(
       [
-        `Season block not found: ${program.title}`,
+        `Season episodes unavailable without confirmed empty state: ${program.title}`,
         `requested=${requestedSeasonNames.join(' | ')}`,
         `available=${seasonCaptureResult.availableSeasonNames.join(' | ')}`,
       ].join(', ')
@@ -1764,7 +1809,7 @@ async function main() {
         // 既存program_masterだけをactive_flag FALSE判定の対象にする。
         if (
           isExistingProgram &&
-          captureResult.rawEpisodeCount === 0
+          captureResult.noEpisodesConfirmed === true
         ) {
           noEpisodeSeriesUrls.push(normalizedProgramUrl);
         }
