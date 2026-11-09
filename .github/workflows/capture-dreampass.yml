@@ -13,7 +13,7 @@ concurrency:
 jobs:
   capture:
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 35
 
     steps:
       - name: Checkout
@@ -31,8 +31,17 @@ jobs:
       - name: Install Playwright Chromium
         run: npx playwright install --with-deps chromium
 
-      - name: Capture Dreampass
+      - name: Capture Dreampass rankings
+        id: rankings
         env:
           DREAMPASS_WEB_APP_URL: ${{ secrets.DREAMPASS_WEB_APP_URL }}
           DREAMPASS_SYNC_TOKEN: ${{ secrets.DREAMPASS_SYNC_TOKEN }}
         run: node scripts/capture-dreampass.js
+
+
+      - name: Capture Dreampass tickets
+        if: ${{ !cancelled() && (steps.rankings.outcome == 'success' || steps.rankings.outcome == 'failure') }}
+        env:
+          DREAMPASS_WEB_APP_URL: ${{ secrets.DREAMPASS_WEB_APP_URL }}
+          DREAMPASS_SYNC_TOKEN: ${{ secrets.DREAMPASS_SYNC_TOKEN }}
+        run: node scripts/capture-dreampass-tickets.js

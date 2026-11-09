@@ -54,8 +54,8 @@ function detectSaleStatus(text, label, purchase) {
   if (/完売しました|チケットは完売|完売御礼|完売いたしました|満員御礼|売り切れました/.test(text) ||
       /(?:^|\s)(?:完売|売り切れ)(?:$|\s)/.test(text)) return "完売";
   if (purchase) return "販売中";
-  if (/販売開始|販売間近/.test(label + text)) return "販売前";
   if (/販売終了|募集終了|受付終了/.test(text) && !/販売終了まで/.test(label)) return "販売終了";
+  if (/販売開始|販売間近/.test(label + text)) return "販売前";
   return "要確認";
 }
 
@@ -150,7 +150,7 @@ async function readListing(page, url) {
   });
 }
 
-async function readEvent(page, eventId, url) {
+async function readEvent(page, eventId, url, known = false) {
   await openPage(page, url);
   const result = await page.evaluate(({ eventId, url }) => {
     const root = document.querySelector(".main");
@@ -199,10 +199,10 @@ async function readEvent(page, eventId, url) {
 
   if (!result.titles.length) {
     result.titles = extractHeadingTitles(result.eventTitle);
-    if (!result.titles.length) {
+    if (!result.titles.length && !known) {
       throw new Error("見出しから作品名を抽出できません: " + url);
     }
-    console.log("見出しの作品名で照合: " + result.titles.join(" / "));
+    if (result.titles.length) console.log("見出しの作品名で照合: " + result.titles.join(" / "));
   }
   const { statusText, statusLabel, purchase, ...event } = result;
   return { ...event, saleStatus: detectSaleStatus(statusText, statusLabel, purchase) };
@@ -235,11 +235,34 @@ async function main() {
       for (const next of listing.pages) if (!visited.has(next)) queue.push(next);
     }
 
+    const savedTargets = new Map();
+    for (const target of targets) {
+      for (const url of target.eventUrls || []) {
+        const match = url.match(/^https:\/\/www\.dreampass\.jp\/e(\d+)$/);
+        if (!match) throw new Error("保存済みイベントURLが不正です: " + url);
+        const id = match[1];
+        if (!savedTargets.has(id)) savedTargets.set(id, new Map());
+        savedTargets.get(id).set(target.title, target);
+      }
+    }
+
+    const listedIds = new Set(events.keys());
+    for (const id of savedTargets.keys()) events.set(id, BASE + "/e" + id);
+
     eventCount = events.size;
-    // 全イベントの「上映情報」で照合。コメント・サイドバーは検索しない。
     for (const [id, url] of events) {
-      const event = await readEvent(page, id, url);
-      const matched = new Map();
+      const knownTargets = savedTargets.get(id);
+      let event;
+      try {
+        event = await readEvent(page, id, url, Boolean(knownTargets));
+      } catch (error) {
+        // 過去の直リンクが消えていても、他の作品の巡回は続ける。
+        if (listedIds.has(id)) throw error;
+        console.warn("保存済みイベントを確認できません: " + url + " / " + error.message);
+        continue;
+      }
+
+      const matched = new Map(knownTargets);
       for (const title of event.titles) {
         const target = titleIndex.get(titleKey(title));
         if (target) matched.set(target.title, target);
@@ -255,7 +278,7 @@ async function main() {
     await browser.close();
   }
 
-  // 途中で1件でも失敗した場合はここに到達せず、前回結果を保持する。
+  // 一覧または一覧掲載中のイベントの取得に失敗した場合は送信しない。
   const saved = await callGas("ticketUpdate", {
     items,
     revision,
@@ -263,7 +286,7 @@ async function main() {
     scanComplete: true,
     eventCount
   });
-  console.log("一覧イベント数: " + eventCount + " / 保存件数: " + saved.updated);
+  console.log("巡回対象イベント数: " + eventCount + " / 保存件数: " + saved.updated);
 }
 
 if (require.main === module) {
