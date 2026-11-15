@@ -1700,6 +1700,7 @@ function buildProgramsForCrawl(basePrograms, talentEpisodes) {
       active_flag: true,
       work_flag: true,
       rank_flag: false,
+      appearance_type: 'guest',
       title_prefix_filter_flag: false,
       season_name: '本編',
       week: '',
@@ -1847,6 +1848,8 @@ async function main() {
 
     programSearchCompleted = true;
 
+    // 全配信回を送信し、準レギュラー・ゲストの出演判定はGASのepisode_id照合に任せる。
+    // new_flagによる最新回限定フィルタはここでは適用しない。
     const episodesForPost = mergeEpisodesBeforePost(
       programPageEpisodes
     );
