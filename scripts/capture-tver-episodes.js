@@ -1835,6 +1835,8 @@ async function main() {
           captureResult.noEpisodesConfirmed === true
         ) {
           noEpisodeSeriesUrls.push(normalizedProgramUrl);
+          // 配信中0件が明示された番組では、既存エピソードの終了判定も許可する。
+          crawledSeriesUrls.push(normalizedProgramUrl);
         }
       } catch (error) {
         console.error(`Failed program: ${program.title} / ${program.url}`);
