@@ -826,8 +826,7 @@ async function captureEpisodesForProgram(page, program) {
         episode.episode_id &&
         episode.program_id &&
         episode.program_title &&
-        episode.episode_title &&
-        episode.broadcast_label
+        episode.episode_title
       );
     });
   // episodesの並び順は変えない。
@@ -1623,8 +1622,7 @@ async function postEpisodesToGas({
       programSearchCompleted,
       talentSearchCompleted,
 
-      // episode_masterには保存しない。
-      // GAS側でprogram_masterの出演者更新・新規番組追加だけに使う。
+      // GAS側で出演確認・program_masterメンテにも使用する（episode配列とは別）。
       talentSearchEpisodes,
     }),
   });
@@ -1739,10 +1737,10 @@ async function main() {
 
   const page = await browser.newPage();
 
-  // episode_masterへ送るのは番組ページ由来だけ。
+  // regular / semi_regularの番組ページ取得結果。
   const programPageEpisodes = [];
 
-  // talent検索由来。GASのprogram_master更新専用で、episode_masterへは保存しない。
+  // 全メンバーの出演者ページで検出した配信中エピソード。
   const talentSearchEpisodes = [];
 
   const crawledSeriesUrls = [];
@@ -1773,7 +1771,6 @@ async function main() {
           talentSearchFailed = true;
         }
 
-        // episode_master送信配列には入れない。
         talentSearchEpisodes.push(...episodes);
       } catch (error) {
         talentSearchFailed = true;
@@ -1789,19 +1786,12 @@ async function main() {
      */
     talentSearchCompleted = !talentSearchFailed;
 
-    // 2. 既存program_master + talent検索で見つけた未登録番組を作る。
-    const programsForCrawl = buildProgramsForCrawl(
-      programs,
-      talentSearchEpisodes
+    // 2. 番組ページはregular / semi_regularだけ巡回。
+    // guestは出演者ページから直接取得し、番組ページを再巡回しない。
+    const programsForCrawl = programs.filter((program) =>
+      ['regular', 'semi_regular'].includes(String(program.appearance_type || '').trim())
     );
-
-    const discoveredProgramCount = programsForCrawl.filter((program) => {
-      return program._isNewTalentProgram;
-    }).length;
-
-    console.log(
-      `New programs discovered from talent search: ${discoveredProgramCount}`
-    );
+    console.log(`Regular/semi-regular programs for crawl: ${programsForCrawl.length}`);
 
     // 3. 番組ページからepisodeを取得する。
     for (const program of programsForCrawl) {
@@ -1818,7 +1808,6 @@ async function main() {
         );
         console.log(`  episodes: ${episodes.length}`);
 
-        // episode_masterへ送るのは番組ページ由来だけ。
         programPageEpisodes.push(...episodes);
 
         const normalizedProgramUrl = normalizeUrlWithoutParams(program.url);
@@ -1844,17 +1833,19 @@ async function main() {
       }
     }
 
-    if (programsForCrawl.length > 0 && successfulProgramCount === 0) {
+    if (programsForCrawl.length > 0 && successfulProgramCount === 0 && talentSearchEpisodes.length === 0) {
       throw new Error('All program page captures failed. Skipping GAS POST to protect existing episode data.');
     }
 
     programSearchCompleted = true;
 
-    // 全配信回を送信し、準レギュラー・ゲストの出演判定はGASのepisode_id照合に任せる。
-    // new_flagによる最新回限定フィルタはここでは適用しない。
-    const episodesForPost = mergeEpisodesBeforePost(
-      programPageEpisodes
-    );
+    // regular/semi_regular番組ページ + talent出演者ページの配信中回を
+    // episode_idで統合する。guestはtalent検索由来のみでも送信する。
+    // 番組ページのbroadcast_labelが空欄でもepisodeは除外しない。
+    const episodesForPost = mergeEpisodesBeforePost([
+      ...programPageEpisodes,
+      ...talentSearchEpisodes,
+    ]);
 
     console.log(
       `ProgramPageEpisodesBeforeMerge: ${programPageEpisodes.length}`
