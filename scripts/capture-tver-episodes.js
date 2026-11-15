@@ -1784,7 +1784,9 @@ async function main() {
      * GASで「今回検出されなかった」ことを根拠に
      * work_flagをFALSEへ更新しない。
      */
-    talentSearchCompleted = !talentSearchFailed;
+    // 出演者一覧が全件空になった場合はUI変更/取得異常の可能性があるため、
+    // GAS側でゲストを一斉終了させない。
+    talentSearchCompleted = !talentSearchFailed && (talents.length === 0 || talentSearchEpisodes.length > 0);
 
     // 2. 番組ページはregular / semi_regularだけ巡回。
     // guestは出演者ページから直接取得し、番組ページを再巡回しない。
