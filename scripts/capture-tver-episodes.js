@@ -105,8 +105,7 @@ function isSeriesUrl(url) {
 }
 
 function isBroadcastLabel(text) {
-  const normalized = normalizeForParse(text);
-  return /\d{1,2}\s*月\s*\d{1,2}\s*日(?:\(.+?\))?\s*放送分/.test(normalized);
+  return Boolean(cleanBroadcastLabel(text));
 }
 
 function isYearBroadcastLabel(text) {
@@ -625,6 +624,12 @@ async function captureEpisodesForProgram(page, program) {
             [
               '[class*="EpisodeListItem_subInfo"]',
               '[class*="SubInfo_root"]',
+              '[class*="subInfo"]',
+              '[class*="SubInfo"]',
+              '[class*="broadcastDate"]',
+              '[class*="BroadcastDate"]',
+              '[class*="meta"]',
+              '[class*="Meta"]',
             ].join(',')
           )
         ).map((element) => element.textContent || '');
@@ -633,6 +638,7 @@ async function captureEpisodesForProgram(page, program) {
           href,
           title,
           subInfoTexts,
+          cardText: link.textContent || '',
           index: uniqueLinks.size,
           seasonName: item.title,
         });
@@ -769,7 +775,10 @@ async function captureEpisodesForProgram(page, program) {
         ? episode.subInfoTexts.map(normalizeText)
         : [];
 
-      const broadcastLabel = pickBroadcastLabelFromSubInfoTexts(subInfoTexts);
+      const broadcastLabel = pickBroadcastLabelFromSubInfoTexts([
+        ...subInfoTexts,
+        episode.cardText || '',
+      ]);
       const endLabel = pickEndLabelFromTexts(subInfoTexts);
       const episodeId = extractEpisodeIdFromHref(href);
       const programId = extractProgramIdFromUrl(programUrl);
@@ -829,6 +838,31 @@ async function captureEpisodesForProgram(page, program) {
         episode.episode_title
       );
     });
+  // 放送日が一覧で見つからない場合だけ、公開エピソード詳細ページで補完する。
+  // APIを直接呼ばず、失敗時はエピソード情報を残す。
+  for (const episode of episodes) {
+    if (parseBroadcastDateParts(episode.broadcast_label)) continue;
+    try {
+      const detail = await captureEpisodeDetailFromEpisodePage(page, episode.episode_url);
+      const label = pickBroadcastLabelFromTexts(detail.subInfoTexts || []);
+      if (!parseBroadcastDateParts(label)) {
+        console.warn('Broadcast date unavailable on public page:', {
+          episodeId: episode.episode_id,
+          episodeUrl: episode.episode_url,
+          cardLabel: episode.broadcast_label,
+          detailTexts: (detail.subInfoTexts || []).slice(0, 12),
+        });
+        continue;
+      }
+      episode.broadcast_label = label;
+      episode.start_at = buildStartAt(label, program.time);
+      episode.start_at_text = buildStartAtText(label, program.time);
+      console.log('Broadcast date recovered:', episode.episode_id, label);
+    } catch (error) {
+      console.warn('Broadcast date fallback failed:', episode.episode_id, error.message);
+    }
+  }
+
   // episodesの並び順は変えない。
   // new_flagを付ける対象だけ、
   // 「放送日が新しい順 → 同日なら本編一覧で後ろ」を基準に選ぶ。
@@ -1957,14 +1991,19 @@ function isInvalidEpisodeTitleText(text) {
 
 function cleanBroadcastLabel(value) {
   const text = normalizeForParse(value);
+  if (!text) return '';
 
-  if (!text) {
-    return '';
-  }
-
+  // 放送日だけを扱い、配信日時を放送日として推測しない。
   const match = text.match(
-    /(?:\d{4}年)?\s*\d{1,2}\s*月\s*\d{1,2}\s*日(?:\(.+?\))?\s*放送分/
+    /(?:(\d{4})年)?\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日(?:\s*[（(]([日月火水木金土])[）)])?\s*放送(?:分)?|(?:(\d{4})[/-])?(\d{1,2})[/-](\d{1,2})(?:\s*[（(]([日月火水木金土])[）)])?\s*放送(?:分)?/
   );
+  if (!match) return '';
 
-  return match ? match[0].trim() : '';
+  const year = match[1] || match[5] || '';
+  const month = Number(match[2] || match[6]);
+  const day = Number(match[3] || match[7]);
+  const weekday = match[4] || match[8] || '';
+  if (month < 1 || month > 12 || day < 1 || day > 31) return '';
+
+  return [year ? year + '年' : '', month + '月', day + '日', weekday ? '(' + weekday + ')' : '', '放送分'].join('');
 }
