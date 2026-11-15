@@ -324,97 +324,43 @@ function buildStartAtText(broadcastLabel, programTime) {
   return `${parts.logicalMonth}月${parts.logicalDay}日(${parts.weekday}) ${parts.displayHour}:${pad2(parts.minute)} 放送`;
 }
 
+// 「終了予定」に直接結びつく日時だけを抽出する。
+// 放送日＋終了日が連結されても、先頭の放送日時は拾わない。
+function extractScheduledEndDate_(value) {
+  const text = normalizeForParse(value).replace(/[（）]/g, (c) => c === '（' ? '(' : ')');
+  if (!text.includes('終了予定')) return null;
+  const re = /(?:(\\d{4})年)?\\s*(\\d{1,2})\\s*月\\s*(\\d{1,2})\\s*日(?:\\s*\\([^)]*\\))?\\s*(\\d{1,2})\\s*:\\s*(\\d{2})\\s*終了予定/g;
+  const matches = Array.from(text.matchAll(re));
+  if (!matches.length) return null;
+  const m = matches[matches.length - 1];
+  const month = Number(m[2]), day = Number(m[3]);
+  const hour = Number(m[4]), minute = Number(m[5]);
+  if (month < 1 || month > 12 || day < 1 || day > 31 || hour > 23 || minute > 59) return null;
+  let year = m[1] ? Number(m[1]) : getCurrentYearInJst();
+  if (!m[1]) {
+    // 年越し時は現在日に最も近い終了予定日時を採用する。
+    const now = Date.now();
+    year = [year - 1, year, year + 1]
+      .filter((candidate) => {
+        const d = new Date(Date.UTC(candidate, month - 1, day));
+        return d.getUTCFullYear() === candidate && d.getUTCMonth() === month - 1 && d.getUTCDate() === day;
+      })
+      .sort((a, b) => Math.abs(Date.UTC(a, month - 1, day, hour - 9, minute) - now) - Math.abs(Date.UTC(b, month - 1, day, hour - 9, minute) - now))[0];
+  }
+  const validDate = new Date(Date.UTC(year, month - 1, day));
+  if (validDate.getUTCFullYear() !== year || validDate.getUTCMonth() !== month - 1 || validDate.getUTCDate() !== day) return null;
+  return { year, month, day, hour, minute, label: m[0].trim() };
+}
+
 function parseEndAt(endLabel) {
-  const text = normalizeForParse(endLabel);
-
-  if (!text) {
-    return '';
-  }
-
-  // 「終了予定」の直前にある日時を優先して拾う
-  // 例: 6月16日(火)放送分6月23日(火)18:59 終了予定
-  // → 6月23日(火)18:59 を拾う
-  const matches = Array.from(
-    text.matchAll(
-      /(?:(\d{4})年)?\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日(?:\(.+?\))?\s*(\d{1,2})\s*:\s*(\d{2})/g
-    )
-  );
-
-  if (matches.length === 0) {
-    return '';
-  }
-
-  // 基本は最後に出てきた日時を終了予定日時として扱う
-  const match = matches[matches.length - 1];
-
-  const year = match[1] ? Number(match[1]) : getCurrentYearInJst();
-  const month = Number(match[2]);
-  const day = Number(match[3]);
-  const hour = Number(match[4]);
-  const minute = Number(match[5]);
-
-  if (
-    !Number.isInteger(year) ||
-    !Number.isInteger(month) ||
-    !Number.isInteger(day) ||
-    !Number.isInteger(hour) ||
-    !Number.isInteger(minute) ||
-    month < 1 ||
-    month > 12 ||
-    day < 1 ||
-    day > 31 ||
-    hour < 0 ||
-    hour > 23 ||
-    minute < 0 ||
-    minute > 59
-  ) {
-    console.log({
-      reason: 'parseEndAt invalid',
-      endLabel,
-      normalized: text,
-      year,
-      month,
-      day,
-      hour,
-      minute,
-    });
-    return '';
-  }
-
-  return `${year}-${pad2(month)}-${pad2(day)} ${hour}:${pad2(minute)}`;
+  const end = extractScheduledEndDate_(endLabel);
+  if (!end) return '';
+  return `${end.year}-${pad2(end.month)}-${pad2(end.day)} ${pad2(end.hour)}:${pad2(end.minute)}`;
 }
 
 function cleanEndLabel(value) {
-  const text = normalizeForParse(value);
-
-  if (!text || !isEndLabel(text)) {
-    return '';
-  }
-
-  // 「終了予定」に紐づく日時だけを抜く
-  // 複数日時が含まれる場合は最後の日時を採用
-  const matches = Array.from(
-    text.matchAll(
-      /(?:\d{4}年)?\s*\d{1,2}\s*月\s*\d{1,2}\s*日(?:\(.+?\))?\s*\d{1,2}\s*:\s*\d{2}\s*終了予定/g
-    )
-  );
-
-  if (matches.length > 0) {
-    return matches[matches.length - 1][0].trim();
-  }
-
-  // 念のため、「終了予定」直前の日時を拾って整形
-  const fallbackMatches = Array.from(
-    text.matchAll(
-      /(?:\d{4}年)?\s*\d{1,2}\s*月\s*\d{1,2}\s*日(?:\(.+?\))?\s*\d{1,2}\s*:\s*\d{2}/g
-    )
-  );
-
-  if (fallbackMatches.length > 0) {
-    return `${fallbackMatches[fallbackMatches.length - 1][0].trim()} 終了予定`;
-  }
-
-  return text;
+  const end = extractScheduledEndDate_(value);
+  return end ? end.label : '';
 }
 
 function toBoolean(value) {
