@@ -549,7 +549,8 @@ async function captureEpisodesForProgram(page, program) {
   const programUrl = normalizeUrlWithoutParams(program.url);
 
   const response = await page.goto(programUrl, {
-    waitUntil: 'networkidle',
+    // TVerは継続的に通信するためnetworkidleを待たない。
+    waitUntil: 'domcontentloaded',
     timeout: 60000,
   });
 
@@ -572,12 +573,12 @@ async function captureEpisodesForProgram(page, program) {
     };
 
     const seasonBlocks = Array.from(
-      document.querySelectorAll('[class*="SeasonEpisodeList_season"]')
+      document.querySelectorAll('[class*="SeriesEpisodeListSection_root"], [class*="SeasonEpisodeList_season"]')
     )
       .map((block) => {
         const title = normalizeSeasonTitle(
           block
-            .querySelector('[class*="SeasonEpisodeList_title"]')
+            .querySelector('[class*="SeriesEpisodeListSection_title"], [class*="SeasonEpisodeList_title"]')
             ?.textContent
         );
 
@@ -1746,6 +1747,7 @@ async function main() {
     .filter(Boolean);
 
   let programSearchCompleted = false;
+  let successfulProgramCount = 0;
   let talentSearchCompleted = false;
   let talentSearchFailed = false;
 
@@ -1800,6 +1802,7 @@ async function main() {
         console.log(`Capture program: ${program.title} / ${program.url}`);
 
         const captureResult = await captureEpisodesForProgram(page, program);
+        successfulProgramCount += 1;
         const episodes = captureResult.episodes || [];
 
         console.log(`  raw episodes: ${captureResult.rawEpisodeCount}`);
@@ -1830,6 +1833,10 @@ async function main() {
         console.error(`Failed program: ${program.title} / ${program.url}`);
         console.error(error);
       }
+    }
+
+    if (programsForCrawl.length > 0 && successfulProgramCount === 0) {
+      throw new Error('All program page captures failed. Skipping GAS POST to protect existing episode data.');
     }
 
     programSearchCompleted = true;
