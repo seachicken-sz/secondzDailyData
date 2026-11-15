@@ -329,7 +329,7 @@ function buildStartAtText(broadcastLabel, programTime) {
 function extractScheduledEndDate_(value) {
   const text = normalizeForParse(value).replace(/[（）]/g, (c) => c === '（' ? '(' : ')');
   if (!text.includes('終了予定')) return null;
-  const re = /(?:(\\d{4})年)?\\s*(\\d{1,2})\\s*月\\s*(\\d{1,2})\\s*日(?:\\s*\\([^)]*\\))?\\s*(\\d{1,2})\\s*:\\s*(\\d{2})\\s*終了予定/g;
+  const re = /(?:(\d{4})年)?\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日(?:\s*\([^)]*\))?\s*(\d{1,2})\s*:\s*(\d{2})\s*終了予定/g;
   const matches = Array.from(text.matchAll(re));
   if (!matches.length) return null;
   const m = matches[matches.length - 1];
