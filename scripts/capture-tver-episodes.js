@@ -899,21 +899,25 @@ async function captureEpisodeLinksFromTalentSearchPage(page, talent) {
   const talentUrl = normalizeUrlWithoutParams(talent.url);
 
   await page.goto(talentUrl, {
-    waitUntil: 'networkidle',
+    waitUntil: 'domcontentloaded',
     timeout: 60000,
   });
 
   await page.waitForTimeout(2000);
 
   const rawItems = await page.evaluate(() => {
+    // 新UIでは配信中エピソードのみを取得。旧UIの場合は従来の抽出を維持。
+    const talentEpisodeContainer = document.querySelector('[class*="TalentEpisodes_container"]');
+    const root = talentEpisodeContainer || document;
     const links = Array.from(
-      document.querySelectorAll('a[href*="/episodes/"]')
+      root.querySelectorAll('a[href*="/episodes/"]')
     );
 
     return links.map((link, index) => {
       const href = link.getAttribute('href') || '';
 
       const card =
+        link.closest('[class*="EpisodeCard_root"]') ||
         link.closest('[class*="EpisodeListItem_container"]') ||
         link.closest('article') ||
         link.closest('li') ||
@@ -923,6 +927,7 @@ async function captureEpisodeLinksFromTalentSearchPage(page, talent) {
 
         const programTitle =
           link.querySelector('[class*="EpisodeListItem_title"]')?.textContent ||
+          link.querySelector('[class*="EpisodeCard_seriesTitle"]')?.textContent ||
           link.querySelector('[class*="EpisodeCard_title"]')?.textContent ||
           link.querySelector('[class*="Title_root"]')?.textContent ||
           card?.querySelector('[class*="EpisodeListItem_title"]')?.textContent ||
@@ -931,6 +936,7 @@ async function captureEpisodeLinksFromTalentSearchPage(page, talent) {
           '';
         
         const episodeTitle =
+          link.querySelector('[class*="EpisodeCard_subTitle"]')?.textContent ||
           link.querySelector('[class*="EpisodeListItem_subTitle"]')?.textContent ||
           link.querySelector('[class*="SubTitle_root"]')?.textContent ||
           card?.querySelector('[class*="EpisodeListItem_subTitle"]')?.textContent ||
