@@ -164,7 +164,9 @@ async function captureProgramFavorite(page, program) {
 
   await waitForPageReady(page, program.url);
 
-  const locator = page.locator('[class*="FavoriteButton_count"]').first();
+  const locator = page
+    .locator('[class*="SeriesInfo_actions"] button[aria-label*="お気に入り"] [class*="IconButton_label"]')
+    .first();
 
   await locator.waitFor({
     state: 'visible',
