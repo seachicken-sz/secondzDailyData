@@ -2,9 +2,6 @@ name: Capture USEN Songs
 
 on:
   workflow_dispatch:
-  schedule:
-    # JST 06:15（UTC前日 21:15）
-    - cron: '15 21 * * *'
 
 permissions:
   contents: read
