@@ -1259,7 +1259,7 @@ function pickEpisodeTitleFromSearchItem(item, detail) {
 /**
  * 出演者検索で拾ったepisodeを詳細つきepisodeに変換する。
  */
-async function enrichTalentSearchEpisode(page, item, talent) {
+async function enrichTalentSearchEpisode(page, item, talent, programsById) {
   const episodeUrl = toAbsoluteUrl(item.href);
   const episodeId = extractEpisodeIdFromHref(episodeUrl);
 
@@ -1311,11 +1311,17 @@ const programId = extractProgramIdFromUrl(seriesUrl);
   const programTitle = pickProgramTitleFromSearchItem(item, detail);
   const episodeTitle = pickEpisodeTitleFromSearchItem(item, detail);
 
-  // 出演者検索由来はprogram_master.timeがない可能性があるため、
-  // start_at/start_at_textは放送ラベルだけでは確定できない。
-  // 既存program_master由来と同一episode_idで統合された場合は、そちらの日時が使われる。
-  const startAt = '';
-  const startAtText = '';
+  // 出演者検索でも放送日が取得でき、既存番組の放送時刻が分かれば日時を生成する。
+  // 番組未登録・放送時刻不明なら推測して埋めず、空欄を維持する。
+  const masterProgram = programsById && programsById.get(programId);
+  const programTime = masterProgram ? masterProgram.time : '';
+  const startAt = isBroadcastLabel(broadcastLabel)
+    ? buildStartAt(broadcastLabel, programTime)
+    : '';
+  const startAtText = isBroadcastLabel(broadcastLabel)
+    ? buildStartAtText(broadcastLabel, programTime)
+    : '';
+  const isUnregisteredProgram = Boolean(programId) && !masterProgram;
 
   return {
     source_type: 'talent_search',
@@ -1333,7 +1339,7 @@ const programId = extractProgramIdFromUrl(seriesUrl);
     end_label: endLabel,
     end_at: parseEndAt(endLabel),
     end_flag: false,
-    new_flag: false,
+    new_flag: isUnregisteredProgram,
 
     series_url: seriesUrl,
     members: '',
@@ -1344,7 +1350,7 @@ const programId = extractProgramIdFromUrl(seriesUrl);
 /**
  * talent_masterの出演者検索URLからepisodeを取得する。
  */
-async function captureEpisodesForTalent(page, talent) {
+async function captureEpisodesForTalent(page, talent, programsById) {
   const rawItems = await captureEpisodeLinksFromTalentSearchPage(page, talent);
 
   console.log(`  raw talent episodes: ${rawItems.length}`);
@@ -1354,7 +1360,7 @@ async function captureEpisodesForTalent(page, talent) {
 
   for (const item of rawItems) {
     try {
-      const episode = await enrichTalentSearchEpisode(page, item, talent);
+      const episode = await enrichTalentSearchEpisode(page, item, talent, programsById);
 
       if (!episode) {
         continue;
@@ -1702,6 +1708,9 @@ async function main() {
 
   const programs = await fetchProgramsFromGas();
   const talents = await fetchTalentsFromGas();
+  const programsById = new Map(programs
+    .map((program) => [extractProgramIdFromUrl(program.url), program])
+    .filter(([programId]) => Boolean(programId)));
 
   console.log(`Programs: ${programs.length}`);
   console.log(`Talents: ${talents.length}`);
@@ -1742,7 +1751,7 @@ async function main() {
       try {
         console.log(`Capture talent: ${talent.name} / ${talent.url}`);
 
-        const captureResult = await captureEpisodesForTalent(page, talent);
+        const captureResult = await captureEpisodesForTalent(page, talent, programsById);
         const episodes = captureResult.episodes || [];
 
         console.log(`  talent episodes: ${episodes.length}`);
