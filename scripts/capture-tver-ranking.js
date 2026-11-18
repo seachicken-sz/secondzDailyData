@@ -352,8 +352,8 @@ async function main() {
     console.error('[WARN] errors:', JSON.stringify(errors, null, 2));
   }
 
-  if (results.length === 0) {
-    throw new Error('全カテゴリの取得または保存に失敗しました');
+  if (errors.length > 0) {
+    throw new Error(`ランキング取得または保存が${errors.length}カテゴリで失敗しました: ${JSON.stringify(errors)}`);
   }
 }
 

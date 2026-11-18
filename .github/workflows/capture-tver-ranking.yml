@@ -1,8 +1,13 @@
 name: Capture TVer Ranking
+run-name: 'Capture TVer Ranking ${{ inputs.batchId }}'
 
 on:
   workflow_dispatch:
     inputs:
+      batchId:
+        description: 'Orchestrator batch ID'
+        required: false
+        type: string
       rankingType:
         description: 'Ranking type. all / drama / variety / talk / vtr / local / empty means all'
         required: false
@@ -39,3 +44,16 @@ jobs:
           else
             npm run capture:tver-ranking
           fi
+
+      - name: Notify GAS orchestrator of completion
+        if: ${{ always() && inputs.batchId != '' }}
+        continue-on-error: true
+        env:
+          TVER_ORCHESTRATOR_CALLBACK_URL: ${{ secrets.TVER_ORCHESTRATOR_CALLBACK_URL }}
+          TVER_ORCHESTRATOR_CALLBACK_TOKEN: ${{ secrets.TVER_ORCHESTRATOR_CALLBACK_TOKEN }}
+          TVER_ORCHESTRATOR_BATCH_ID: ${{ inputs.batchId }}
+          TVER_ORCHESTRATOR_STEP: ranking
+          TVER_ORCHESTRATOR_WORKFLOW_FILE: capture-tver-ranking.yml
+          TVER_ORCHESTRATOR_CONCLUSION: ${{ job.status }}
+          TVER_ORCHESTRATOR_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: node scripts/notify-tver-orchestrator.js

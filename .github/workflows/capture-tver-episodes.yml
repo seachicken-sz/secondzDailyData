@@ -1,7 +1,13 @@
 name: Capture TVer Episodes
+run-name: 'Capture TVer Episodes ${{ inputs.batchId }}'
 
 on:
   workflow_dispatch:
+    inputs:
+      batchId:
+        description: 'Orchestrator batch ID'
+        required: false
+        type: string
   schedule:
     # JST 04:00
     - cron: '0 19 * * *'
@@ -33,3 +39,16 @@ jobs:
           GAS_WEB_APP_URL: ${{ secrets.GAS_WEB_APP_URL }}
           GAS_WEB_APP_TOKEN: ${{ secrets.GAS_WEB_APP_TOKEN }}
         run: npm run capture:tver-episodes
+
+      - name: Notify GAS orchestrator of completion
+        if: ${{ always() && inputs.batchId != '' }}
+        continue-on-error: true
+        env:
+          TVER_ORCHESTRATOR_CALLBACK_URL: ${{ secrets.TVER_ORCHESTRATOR_CALLBACK_URL }}
+          TVER_ORCHESTRATOR_CALLBACK_TOKEN: ${{ secrets.TVER_ORCHESTRATOR_CALLBACK_TOKEN }}
+          TVER_ORCHESTRATOR_BATCH_ID: ${{ inputs.batchId }}
+          TVER_ORCHESTRATOR_STEP: episode
+          TVER_ORCHESTRATOR_WORKFLOW_FILE: capture-tver-episodes.yml
+          TVER_ORCHESTRATOR_CONCLUSION: ${{ job.status }}
+          TVER_ORCHESTRATOR_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: node scripts/notify-tver-orchestrator.js
