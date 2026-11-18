@@ -1,0 +1,40 @@
+name: Capture USEN Songs
+
+on:
+  workflow_dispatch:
+  schedule:
+    # JST 06:15（UTC前日 21:15）
+    - cron: '15 21 * * *'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: capture-usen-songs
+  cancel-in-progress: false
+
+jobs:
+  capture:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Capture USEN artist songs and sync to GAS
+        env:
+          USEN_WEB_APP_URL: ${{ secrets.USEN_WEB_APP_URL }}
+          USEN_IMPORT_SECRET: ${{ secrets.USEN_IMPORT_SECRET }}
+        run: node scripts/capture-usen-songs.js
