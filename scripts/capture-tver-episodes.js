@@ -858,8 +858,11 @@ async function captureEpisodesForProgram(page, program) {
     return b.sourceIndex - a.sourceIndex;
   })[0]?.episodeId || '';
 
+  const isRegularProgram = String(program.appearance_type || '').trim() === 'regular';
   episodes.forEach((episode) => {
-    episode.new_flag = episode.episode_id === latestEpisodeId;
+    // regularのみ指定ブロック内の最新話をランキング対象にする。
+    // semi_regularは出演者検索で検出された回だけを対象にする。
+    episode.new_flag = isRegularProgram && episode.episode_id === latestEpisodeId;
   });
   return {
     episodes,
@@ -1321,7 +1324,11 @@ const programId = extractProgramIdFromUrl(seriesUrl);
   const startAtText = isBroadcastLabel(broadcastLabel)
     ? buildStartAtText(broadcastLabel, programTime)
     : '';
-  const isUnregisteredProgram = Boolean(programId) && !masterProgram;
+  const appearanceType = masterProgram
+    ? String(masterProgram.appearance_type || '').trim()
+    : '';
+  // regularの対象は番組ページで選択する。その他は出演者検索で見つけた回を対象にする。
+  const isRankingTargetFromTalent = Boolean(programId) && appearanceType !== 'regular';
 
   return {
     source_type: 'talent_search',
@@ -1339,7 +1346,7 @@ const programId = extractProgramIdFromUrl(seriesUrl);
     end_label: endLabel,
     end_at: parseEndAt(endLabel),
     end_flag: false,
-    new_flag: isUnregisteredProgram,
+    new_flag: isRankingTargetFromTalent,
 
     series_url: seriesUrl,
     members: '',
