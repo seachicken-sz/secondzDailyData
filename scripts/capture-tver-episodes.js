@@ -119,7 +119,7 @@ function pickBroadcastLabelFromSubInfoTexts(texts) {
     : [];
 
   for (const text of normalizedTexts) {
-    const cleaned = cleanBroadcastLabel(text);
+    const cleaned = cleanBroadcastLabel(text, true);
 
     if (isBroadcastLabel(cleaned)) {
       return cleaned;
@@ -162,7 +162,7 @@ function getJapaneseWeekdayFromDateParts(year, month, day) {
 function parseBroadcastDateParts(broadcastLabel) {
   const text = normalizeForParse(broadcastLabel);
 
-  const match = text.match(/(?:(\d{4})年)?\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日(?:\((.+?)\))?/);
+  const match = text.match(/(?:(\d{4})年\s*)?(\d{1,2})\s*月\s*(\d{1,2})\s*日(?:\s*[（(]([日月火水木金土])[）)])?|(?:(\d{4})[/-])?(\d{1,2})[/-](\d{1,2})(?:\s*[（(]([日月火水木金土])[）)])?/);
 
   if (!match) {
     console.log({
@@ -173,10 +173,30 @@ function parseBroadcastDateParts(broadcastLabel) {
     return null;
   }
 
-  const year = match[1] ? Number(match[1]) : getCurrentYearInJst();
-  const month = Number(match[2]);
-  const day = Number(match[3]);
-  const weekday = match[4] ? String(match[4]).trim() : '';
+  const explicitYear = match[1] || match[5];
+  const month = Number(match[2] || match[6]);
+  const day = Number(match[3] || match[7]);
+  const weekday = match[4] || match[8] || '';
+  const now = new Date();
+  const currentYear = getCurrentYearInJst();
+  const years = explicitYear ? [Number(explicitYear)] : [currentYear - 1, currentYear, currentYear + 1];
+  const candidates = years
+    .map(year => ({ year, date: new Date(Date.UTC(year, month - 1, day)) }))
+    .filter(({ year, date }) =>
+      date.getUTCFullYear() === year &&
+      date.getUTCMonth() === month - 1 &&
+      date.getUTCDate() === day &&
+      (!weekday || getJapaneseWeekdayFromDateParts(year, month, day) === weekday)
+    )
+    .sort((a, b) => {
+      // 原則として放送済みの日付を選ぶ。翌日までの日時はタイムゾーン差を許容する。
+      const limit = now.getTime() + 24 * 60 * 60 * 1000;
+      const ap = a.date.getTime() <= limit;
+      const bp = b.date.getTime() <= limit;
+      if (ap !== bp) return ap ? -1 : 1;
+      return ap ? b.date - a.date : a.date - b.date;
+    });
+  const year = candidates[0]?.year;
 
   if (
     !Number.isInteger(year) ||
@@ -185,7 +205,8 @@ function parseBroadcastDateParts(broadcastLabel) {
     month < 1 ||
     month > 12 ||
     day < 1 ||
-    day > 31
+    day > 31 ||
+    !candidates.length
   ) {
     console.log({
       reason: 'parseBroadcastDateParts invalid date',
@@ -255,7 +276,7 @@ function parseProgramTime(timeText) {
 
 function buildBroadcastDateTimeParts(broadcastLabel, programTime) {
   const dateParts = parseBroadcastDateParts(broadcastLabel);
-  const timeParts = parseProgramTime(programTime);
+  const timeParts = programTime ? parseProgramTime(programTime) : { hour: 0, minute: 0 };
 
   if (!dateParts || !timeParts) {
     console.log({
@@ -311,7 +332,7 @@ function buildStartAt(broadcastLabel, programTime) {
     return '';
   }
 
-  return `${parts.actualYear}-${pad2(parts.actualMonth)}-${pad2(parts.actualDay)} ${parts.actualHour}:${pad2(parts.minute)}`;
+  return `${parts.actualYear}-${pad2(parts.actualMonth)}-${pad2(parts.actualDay)} ${pad2(parts.actualHour)}:${pad2(parts.minute)}`;
 }
 
 function buildStartAtText(broadcastLabel, programTime) {
@@ -319,6 +340,10 @@ function buildStartAtText(broadcastLabel, programTime) {
 
   if (!parts) {
     return '';
+  }
+
+  if (!programTime) {
+    return `${parts.logicalMonth}月${parts.logicalDay}日(${parts.weekday}) 放送（時刻未取得）`;
   }
 
   return `${parts.logicalMonth}月${parts.logicalDay}日(${parts.weekday}) ${parts.displayHour}:${pad2(parts.minute)} 放送`;
@@ -1111,13 +1136,13 @@ function pickFirstSeriesUrlFromDetail(detail) {
   return uniqueSeriesUrls[0] || '';
 }
 
-function pickBroadcastLabelFromTexts(texts) {
+function pickBroadcastLabelFromTexts(texts, trustedCount = 0) {
   const normalizedTexts = Array.isArray(texts)
     ? texts.map(normalizeText)
     : [];
 
-  for (const text of normalizedTexts) {
-    const cleaned = cleanBroadcastLabel(text);
+  for (const [index, text] of normalizedTexts.entries()) {
+    const cleaned = cleanBroadcastLabel(text, index < trustedCount);
 
     if (isBroadcastLabel(cleaned)) {
       return cleaned;
@@ -1308,14 +1333,14 @@ const programId = extractProgramIdFromUrl(seriesUrl);
     detail.bodyText || '',
   ];
 
-  const broadcastLabel = pickBroadcastLabelFromTexts(textsForLabels);
+  const broadcastLabel = pickBroadcastLabelFromTexts(textsForLabels,
+    (item.subInfoTexts?.length || 0) + (detail.subInfoTexts?.length || 0));
   const endLabel = pickEndLabelFromTexts(textsForLabels);
 
   const programTitle = pickProgramTitleFromSearchItem(item, detail);
   const episodeTitle = pickEpisodeTitleFromSearchItem(item, detail);
 
-  // 出演者検索でも放送日が取得でき、既存番組の放送時刻が分かれば日時を生成する。
-  // 番組未登録・放送時刻不明なら推測して埋めず、空欄を維持する。
+  // 放送日が確認できた場合、番組の放送時刻がなければ00:00を仮設定する。
   const masterProgram = programsById && programsById.get(programId);
   const programTime = masterProgram ? masterProgram.time : '';
   const startAt = isBroadcastLabel(broadcastLabel)
@@ -1323,7 +1348,7 @@ const programId = extractProgramIdFromUrl(seriesUrl);
     : '';
   const startAtText = isBroadcastLabel(broadcastLabel)
     ? buildStartAtText(broadcastLabel, programTime)
-    : '';
+    : broadcastLabel;
   const appearanceType = masterProgram
     ? String(masterProgram.appearance_type || '').trim()
     : '';
@@ -1951,14 +1976,16 @@ function isInvalidEpisodeTitleText(text) {
     value === 'スポーツ';
 }
 
-function cleanBroadcastLabel(value) {
+function cleanBroadcastLabel(value, allowBareDate = false) {
   const text = normalizeForParse(value);
   if (!text) return '';
 
-  // 放送日だけを扱い、配信日時を放送日として推測しない。
+  // 終了予定・配信日を放送日として誤取得しない。
   const match = text.match(
-    /(?:(\d{4})年)?\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日(?:\s*[（(]([日月火水木金土])[）)])?\s*放送(?:分)?|(?:(\d{4})[/-])?(\d{1,2})[/-](\d{1,2})(?:\s*[（(]([日月火水木金土])[）)])?\s*放送(?:分)?/
-  );
+    /(?:(\d{4})年\s*)?(\d{1,2})\s*月\s*(\d{1,2})\s*日(?:\s*[（(]([日月火水木金土])[）)])?\s*放送(?:分)?|(?:(\d{4})[/-])?(\d{1,2})[/-](\d{1,2})(?:\s*[（(]([日月火水木金土])[）)])?\s*放送(?:分)?/
+  ) || (allowBareDate && !/配信|終了予定|公開|更新/.test(text) && text.length <= 40
+    ? text.match(/^(?:(\d{4})年\s*)?(\d{1,2})\s*月\s*(\d{1,2})\s*日(?:\s*[（(]([日月火水木金土])[）)])?$|^(?:(\d{4})[/-])?(\d{1,2})[/-](\d{1,2})(?:\s*[（(]([日月火水木金土])[）)])?$/)
+    : null);
   if (!match) return '';
 
   const year = match[1] || match[5] || '';
