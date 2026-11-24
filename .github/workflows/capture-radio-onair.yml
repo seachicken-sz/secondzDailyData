@@ -1,0 +1,24 @@
+name: Capture Radio On Air
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: capture-radio-onair
+  cancel-in-progress: false
+jobs:
+  capture:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: npm install
+      - run: npx playwright install --with-deps chromium
+      - name: Capture and sync
+        env:
+          RADIO_WEB_APP_URL: ${{ secrets.RADIO_WEB_APP_URL }}
+          RADIO_SYNC_TOKEN: ${{ secrets.RADIO_SYNC_TOKEN }}
+        run: node scripts/capture-radio-onair.js
