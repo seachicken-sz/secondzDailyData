@@ -1,0 +1,45 @@
+name: Debug Radio Schedule
+on:
+  workflow_dispatch:
+    inputs:
+      station:
+        description: "sample = TOKYO FM desktop and mobile; all = 13 candidate mobile pages"
+        required: true
+        type: choice
+        default: sample
+        options:
+          - sample
+          - all
+          - tokyo_fm
+          - fm_osaka
+          - fm_fukuoka
+          - fm_niigata
+          - date_fm
+          - fm_aichi
+          - kiss_fm
+          - e_radio
+          - kmix
+          - tokai_radio
+          - nack5
+          - alpha_station
+          - fm_yokohama
+permissions:
+  contents: read
+concurrency:
+  group: debug-radio-schedule
+  cancel-in-progress: false
+jobs:
+  inspect:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: npm install
+      - run: npx playwright install --with-deps chromium
+      - name: Inspect public schedule pages
+        env:
+          DEBUG_STATION: ${{ inputs.station }}
+        run: node scripts/debug-radio-schedule.js "$DEBUG_STATION"
