@@ -9,6 +9,17 @@ async function collect(page,station,date){
   await field.waitFor({state:"visible",timeout:20000});
   if(await field.count()!==1)throw new Error("Date form not recognized: TOKAI RADIO");
   await page.waitForFunction(date=>[...document.querySelectorAll("select#time option")].some(e=>e.value===date),date,{timeout:10000});
+  // The select can appear before musicList finishes its initial rendering.
+  await page.waitForFunction(()=>{
+    const selected=document.querySelector("select#time")?.value;
+    const rows=[...document.querySelectorAll(".js-result.onair-result ul > li")];
+    if(!selected||!rows.length)return false;
+    return rows.every(r=>{
+      const m=r.querySelector("span")?.innerText.match(/^(\d{4})年(\d{1,2})月(\d{1,2})日/);
+      return m&&m[1]+"-"+m[2].padStart(2,"0")+"-"+m[3].padStart(2,"0")===selected;
+    });
+  },null,{timeout:20000});
+  await page.waitForTimeout(1000);
   if(await field.inputValue()!==date)await field.selectOption(date,{timeout:10000});
   if(await field.inputValue()!==date)throw new Error("Result date not confirmed");
   return stableResult(page,date,()=>{
@@ -23,7 +34,7 @@ async function collect(page,station,date){
       return {datetime:cells[time]?.innerText||"",song_name:cells[title]?.innerText||"",artist_name:cells[artist]?.innerText||""};
     });
     const paging=[...(root?.querySelectorAll("a,button")||[])].some(e=>e.getClientRects().length&&(/^(次へ|次のページ|もっと見る|次の\d+件|Next|Load more|[0-9]+)$/i.test(e.innerText.trim())||e.rel==="next"));
-    return {ready:!!root&&headline.length===3&&new Set([time,title,artist]).size===3&&[time,title,artist].every(i=>i>=0),rows,paging};
+    return {selectedDate:document.querySelector("select#time")?.value||"",ready:!!root&&headline.length===3&&new Set([time,title,artist]).size===3&&[time,title,artist].every(i=>i>=0),rows,paging};
   },"TOKAI RADIO");
 }
 module.exports={collect};

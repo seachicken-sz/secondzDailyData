@@ -13,9 +13,11 @@ async function collect(page,station,date){
     const values=["year","month","day"].map(n=>Number((document.querySelector('select[name="'+n+'"]')?.value||"").replace(/[年月日]/g,"")));
     const expected=location.pathname.match(/\/(\d{4})(\d{2})(\d{2})\.html$/)?.slice(1).map(Number);
     const clean=e=>e?.innerText||"";
-    const rows=[...(root?.querySelectorAll(".music-wrap .music-txt-body")||[])].map(e=>({datetime:clean(e.querySelector(".on-air-time")),song_name:clean(e.querySelector("h3")),artist_name:clean(e.querySelector(".artist-name"))}));
+    const rows=[...(root?.querySelectorAll(".music-wrap .music-txt-body")||[])].map(e=>({datetime:clean(e.querySelector(".on-air-time")).normalize("NFKC").trim().replace(/^\[O\.A\]\s*/,""),song_name:clean(e.querySelector("h3")),artist_name:clean(e.querySelector(".artist-name"))}));
     const paging=[...(root?.querySelectorAll("a,button")||[])].some(e=>e.getClientRects().length&&(/^(次へ|次のページ|もっと見る|次の\d+件|Next|Load more|[0-9]+)$/i.test(e.innerText.trim())||e.rel==="next"));
-    return {ready:!!root&&!!expected&&values.every((v,i)=>v===expected[i]),rows,paging};
+    const countText=clean(root?.querySelector(".result-header span")).normalize("NFKC").trim().replace(/,/g,"");
+    const expectedCount=/^\d+$/.test(countText)?Number(countText):null;
+    return {expectedCount,requiresCount:true,ready:!!root&&!!expected&&values.every((v,i)=>v===expected[i]),rows,paging};
   },"NACK5");
 }
 module.exports={collect};
