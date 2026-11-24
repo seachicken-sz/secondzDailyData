@@ -93,7 +93,7 @@ async function submitFor(field){
     const label=await b.evaluate(e=>(e.innerText||e.value||e.getAttribute("aria-label")||"").trim());
     if(/^(検索(?:する)?|表示(?:する)?|GO|Search)$/i.test(label))candidates.push(b);
   }
-  if(candidates.length!==1)throw new Error("Search submit not unique");
+  if(candidates.length!==1)throw new Error("Search submit not unique: "+candidates.length);
   await candidates[0].click({timeout:10000});
 }
 async function stationSearch(page,id,date){
@@ -141,9 +141,90 @@ async function stationSearch(page,id,date){
   return null;
 }
 
+
+async function visit(page,url){
+  const r=await page.goto(url,{waitUntil:"domcontentloaded",timeout:35000});
+  if(!r?.ok())throw new Error("Page HTTP "+r?.status());
+  await page.waitForTimeout(3000);
+}
+async function facts(page,id,stage){
+  const result=await page.evaluate(()=>{
+    const clean=s=>String(s||"").replace(/\s+/g," ").trim();
+    const visible=e=>!!e.getClientRects().length;
+    const desc=e=>({tag:e.tagName,id:e.id,cls:typeof e.className==="string"?e.className:""});
+    const shape=e=>({ ...desc(e), children:[...e.children].slice(0,12).map(c=>({...desc(c),children:[...c.children].slice(0,6).map(desc)}))});
+    const dateRx=/\d{4}[年\/.-]\d{1,2}[月\/.-]\d{1,2}日?/;
+    const timeRx=/(?:[0-2]?\d:[0-5]\d|\d{1,2}時\d{1,2}分)/;
+    const dates=[...document.querySelectorAll("body *")].filter(e=>visible(e)&&e.children.length===0&&dateRx.test(clean(e.innerText))).slice(0,12).map(e=>({date:clean(e.innerText).match(dateRx)[0],shape:desc(e.parentElement)}));
+    const times=[...document.querySelectorAll("body *")].filter(e=>visible(e)&&e.children.length===0&&timeRx.test(clean(e.innerText)));
+    const rows=[...document.querySelectorAll("table.songs tr,table.table_style02 tr")].filter(e=>e.querySelector("td"));
+    const rowTimes=rows.map(r=>clean(r.cells[0]?.innerText)).filter(t=>timeRx.test(t));
+    const links=[...document.querySelectorAll("a[href]")].filter(visible).filter(e=>/次|前|ページ|^[0-9]+$|next|prev/i.test(clean(e.innerText))).slice(0,30).map(e=>{const u=new URL(e.href,location.href);return {label:clean(e.innerText).slice(0,30),path:u.pathname,params:Object.fromEntries([...u.searchParams].filter(([k])=>["mode","page","seldate","selhour"].includes(k)))};});
+    const areas=[...document.querySelectorAll('[id*="onair" i],[class*="onair" i],[id*="song" i],[class*="song" i],[id*="music" i],[class*="music" i]')].filter(visible).slice(0,25).map(e=>({...shape(e),textLength:clean(e.innerText).length}));
+    const status=[...document.querySelectorAll("body *")].filter(e=>!e.children.length&&visible(e)&&/該当|件中|件表示|検索結果|曲がありません|取得でき|エラー|no results|no songs/i.test(clean(e.innerText))).slice(0,10).map(e=>clean(e.innerText).slice(0,100));
+    return {dates,timeCount:times.length,firstTime:rowTimes[0],lastTime:rowTimes.at(-1),tableRows:rows.length,tableTimeRows:rowTimes.length,timeShapes:times.slice(0,4).map(e=>({time:clean(e.innerText).match(timeRx)?.[0],parent:shape(e.parentElement),grandparent:e.parentElement?.parentElement?shape(e.parentElement.parentElement):null})),links,areas,status};
+  });
+  console.log("RESULT_FACTS",id,stage,JSON.stringify(result));
+}
+async function probe(page,id,date){
+  const [y,m,d]=date.split("-");
+  if(id==="nack5"){
+    await visit(page,new URL(date.replace(/-/g,"")+".html",stations[id]).href);
+    await inspect(page,id,"daily_url");
+    await facts(page,id,"daily_url");
+    return true;
+  }
+  if(id==="crossfm"){
+    const u=new URL(stations[id]);
+    for(const [k,v] of Object.entries({mode:"0",page:"0",seldate:date,selhour:""}))u.searchParams.set(k,v);
+    await visit(page,u.href);
+    await inspect(page,id,"daily_page0");
+    await facts(page,id,"daily_page0");
+    const next=await page.evaluate(date=>[...document.querySelectorAll("a[href]")].map(e=>new URL(e.href,location.href)).find(u=>u.origin===location.origin&&u.pathname===location.pathname&&u.searchParams.get("seldate")===date&&Number(u.searchParams.get("page"))>0&& !u.searchParams.get("selhour"))?.href,date);
+    if(next){await visit(page,next);await facts(page,id,"daily_next");}
+    return true;
+  }
+  if(id==="interfm"){
+    const url=new URL(stations[id]);
+    for(const [k,v] of Object.entries({a:"timelesz",sd:date,st:"00:00",ed:date,et:"23:59"}))url.searchParams.set(k,v);
+    await visit(page,url.href);
+    await inspect(page,id,"direct_search");
+    await facts(page,id,"direct_search");
+    return true;
+  }
+  if(id==="fm_yokohama"){
+    await visit(page,new URL("/songsearch/time-form.html",stations[id]).href);
+    for(const [sel,v] of Object.entries({"#ReqYear":y,"#ReqMon":m,"#ReqDay":d,"#HourSelect":"12","#MinSelect":"00"}))await (await uniqueVisible(page,sel)).selectOption(v,{timeout:5000});
+    await submitFor(await uniqueVisible(page,"#ReqDay"));
+    await page.waitForTimeout(4000);
+    await inspect(page,id,"time_result");
+    await facts(page,id,"time_result");
+    await visit(page,new URL("/songsearch/program-form.html",stations[id]).href);
+    await inspect(page,id,"program_form");
+    return true;
+  }
+  await visit(page,stations[id]);
+  await inspect(page,id,"before");
+  await facts(page,id,"before");
+  if(id==="tokai_radio"){
+    await (await uniqueVisible(page,"select#time")).selectOption(date,{timeout:5000});
+    await page.waitForTimeout(5000);
+    await inspect(page,id,"after_date");
+    await facts(page,id,"after_date");
+    return true;
+  }
+  if(id==="alpha_station"){
+    await page.waitForTimeout(5000);
+    await facts(page,id,"after_5s");
+    console.log("CURRENT_LIST_ONLY",id,"no date selection confirmed");
+    return false;
+  }
+  return false;
+}
+
 async function main(){
   const selected=process.argv[2]||"all";
-  const ids=selected==="all"?Object.keys(stations):[selected];
+  const ids=selected==="all"?["tokai_radio","fm_yokohama","nack5","interfm","crossfm","alpha_station"]:[selected];
   if(ids.some(id=>!Object.hasOwn(stations,id)))throw new Error("Unknown station");
   const {browser}=await openBrowser();
   const results=[];
@@ -155,25 +236,7 @@ async function main(){
       page.on("framenavigated",f=>{if(f===page.mainFrame())console.log("NAVIGATION",id,f.url().split("?")[0]);});
       page.on("response",r=>{if(r.request().resourceType()==="document")console.log("DOCUMENT",id,r.status(),r.url().split("?")[0]);});
       try{
-        const response=await page.goto(stations[id],{waitUntil:"domcontentloaded",timeout:35000});
-        if(!response?.ok())throw new Error("Page HTTP "+response?.status());
-        await page.waitForTimeout(5000);
-        await inspect(page,id,"before");
-        let searched=await stationSearch(page,id,jstDates(2)[1]);
-        if(searched===null){
-          searched=false;
-          for(const frame of page.frames()){
-            if(frame!==page.mainFrame()&&new URL(frame.url()).origin!==new URL(page.url()).origin)continue;
-            if(!/^https?:/.test(frame.url()))continue;
-            if(await search(frame,jstDates(2)[1])){searched=true;break;}
-          }
-        }
-        if(searched){
-          await page.waitForTimeout(5000);
-          for(const p of context.pages())await inspect(p,id,"after_5s");
-          await page.waitForTimeout(5000);
-          for(const p of context.pages())await inspect(p,id,"after_10s");
-        }
+        const searched=await probe(page,id,jstDates(2)[1]);
         results.push({id,status:searched?"searched":"inspected_only"});
       }catch(e){console.log("STATION_ERROR",id,String(e.message).slice(0,500));results.push({id,status:"error"});}
       finally{await context.close();}

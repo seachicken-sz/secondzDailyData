@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
     inputs:
       station:
-        description: "all = nine unsupported stations; jfn = TOKYO FM"
+        description: "all = six active investigation stations; jfn = TOKYO FM"
         required: true
         type: choice
         default: all
