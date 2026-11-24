@@ -72,13 +72,13 @@ async function extract(page,id,date){
    fm_fukuoka:"li.radiko",
    fm_niigata:".right-content",
    date_fm:".timetable_item",
-   fm_aichi: "table tr",
+   fm_aichi: "table tr:has(> th.tm-m)",
    kiss_fm:".timetable tr",
    e_radio:"section table tr",
    kmix:".tableBtn",
    tokai_radio:"p.time",
-   fm_yokohama:".program-wrap #result tr",
-   nack5:".program-item-header, .program-column-first",
+   fm_yokohama:".program-wrap #result tr, .program:has(> .program-head .time)",
+   nack5:".program-item",
    alpha_station:".timetable-content-item"
   };
   const timeRx=/(?:[0-2]?\d|30):[0-5]\d/g;
@@ -94,16 +94,33 @@ async function extract(page,id,date){
   for(const raw of roots){
    let e=raw;
    if(id==="tokai_radio")e=raw.parentElement;
-   if(id==="fm_fukuoka")e=raw.closest("ul")?.parentElement||raw;
-   if(id==="nack5")e=raw.parentElement;
+   if(["tokyo_fm","fm_fukuoka","fm_niigata","kmix"].includes(id)){
+    // Find the smallest ancestor containing one program link and a title.
+    // Keep all ancestor evidence below even if this heuristic fails.
+    const target=id==="fm_fukuoka"?null:raw;
+    for(let p=raw,j=0;p&&j<6;p=p.parentElement,j++){
+     const count=[...p.querySelectorAll("a[href]")].filter(vis).map(linkInfo).filter(Boolean).length;
+     const names=p.querySelectorAll("h2,h3,h4,.program-title,.program-name,.program_title,.program_name,.title,.p_title,.programTitle,.pg_name,[class*='programName'],[class*='programTitle'],[class*='table_title'],[class*='tableTitle']");
+     if(count===1&&names.length){e=p;break;}
+     if(target&&count>1)break;
+    }
+   }
    if(e.closest(".tt_corner,.corner,.corners,.corner-pro,.program-corner,.programDetail"))continue;
    if(id==="kiss_fm"&&!raw.querySelector(":scope > td.time"))continue;
-   if(id==="fm_yokohama"&&!raw.querySelector("td.title a"))continue;
+   if(id==="fm_yokohama"&&raw.matches("tr")&&!raw.querySelector("td.title a"))continue;
    const timeNodes=[...e.querySelectorAll(":scope > .time,:scope > .program-start,:scope > .program-end,:scope > td.time,:scope > th,:scope > .program-head .time,:scope > .content > .time,:scope > .program-on-air-time,:scope > .program-time")].filter(vis);
-   if(id==="tokai_radio")timeNodes.push(raw);
-   const timeTexts=timeNodes.map(n=>clean(n.innerText));
+   if(id==="date_fm")control=page.locator("a[href='#"+target.replace(/-/g,"")+"']").filter({visible:true});
+      if(id==="tokai_radio"){timeNodes.length=0;timeNodes.push(raw);}
+   if(id==="fm_fukuoka"&&!timeNodes.length)timeNodes.push(raw.querySelector(".time")||raw);
+   if(["tokyo_fm","fm_niigata","kmix","nack5"].includes(id)&&!timeNodes.length){
+    const more=[...e.querySelectorAll("[class*='time' i],[class*='start' i],[class*='end' i]")].filter(vis).filter(n=>!n.closest(".tt_corner,.corner,.corners,.corner-pro,.program-corner,.programDetail,.table_sub")&&/^(?:[0-2]?\d):[0-5]\d(?:\s*[-~〜～–]?\s*(?:[0-2]?\d):[0-5]\d)?$/.test(clean(n.innerText)));
+    const smallest=more.filter(n=>!more.some(m=>m!==n&&n.contains(m)&&clean(m.innerText)===clean(n.innerText)));
+    timeNodes.push(...smallest);
+   }
+   const timeTexts=[...new Set(timeNodes.map(n=>clean(n.innerText)))];
    const ownLinks=[...e.querySelectorAll("a[href]")].filter(vis).map(linkInfo).filter(Boolean);
-   const titleNodes=[...e.querySelectorAll("h2,h3,h4,.program-title,.program-name,.program_title,.program_name,.title,.p_title,td.title,.programTitle")].filter(vis).filter(n=>!n.closest(".tt_corner,.corner,.corners,.corner-pro,.program-corner,.programDetail"));
+   const titleSelector=id==="kiss_fm"?".pg_name":id==="fm_aichi"?".main_color":"h2,h3,h4,.program-title,.program-name,.program_title,.program_name,.title,.p_title,td.title,.programTitle,[class*='programName'],[class*='programTitle'],[class*='table_title'],[class*='tableTitle']";
+   const titleNodes=[...e.querySelectorAll(titleSelector)].filter(vis).filter(n=>!n.closest(".tt_corner,.corner,.corners,.corner-pro,.program-corner,.programDetail"));
    const titles=[...new Set(titleNodes.map(n=>clean(n.innerText)).filter(Boolean))].slice(0,5);
    const leaves=[...e.querySelectorAll("*")].filter(n=>n.children.length===0&&vis(n)&&!n.closest(".tt_corner,.corner,.corners,.corner-pro,.program-corner,.programDetail")).map(n=>({text:clean(n.innerText).slice(0,100),...shape(n)})).filter(n=>n.text).slice(0,18);
    const times=timeTexts.flatMap(t=>t.match(timeRx)||[]);
@@ -112,6 +129,17 @@ async function extract(page,id,date){
   }
   // Deduplicate identical DOM candidates; do not deduplicate by title alone.
   const rows=[...new Map(candidates.map(c=>[JSON.stringify(c),c])).values()].slice(0,150);
+  const describe=n=>({...shape(n),text:clean(n.innerText).slice(0,160),directText:clean([...n.childNodes].filter(c=>c.nodeType===3).map(c=>c.textContent).join(" ")).slice(0,100),visible:vis(n),children:[...n.children].slice(0,12).map(c=>({...shape(c),text:clean(c.innerText).slice(0,100),visible:vis(c)}))});
+  const hierarchy=n=>{const chain=[];for(let j=0;n&&j<7;j++,n=n.parentElement)chain.push(describe(n));return chain;};
+  const detailEvidence=roots.slice(0,3).map(hierarchy);
+  const linkHierarchy=[...document.querySelectorAll("a[href]")].filter(vis).filter(a=>linkInfo(a)).slice(0,3).map(hierarchy);
+  const dateEvidence={
+   url:location.href,
+   formDate:["ReqYear","ReqMon","ReqDay"].map(k=>document.getElementById(k)?.value||"").join("-"),
+   activeControls:[...document.querySelectorAll("a.active,a.-active,li.active,li.current,[aria-selected=true],input:checked")].filter(n=>vis(n)||n.matches("input:checked")).map(n=>({shape:shape(n),text:clean(n.innerText||n.labels?.[0]?.innerText).slice(0,80),href:n.matches("a")?n.getAttribute("href"):undefined})).filter(x=>/\d{1,2}[./月-]\d{1,2}|MON|TUE|WED|THU|FRI|SAT|SUN|曜日/i.test(x.text)).slice(0,30),
+   timetableSections:[...document.querySelectorAll("[id*='2026'],[data-date],.timetable-contents,.timetable-content,.timetable-week,.timetable_item")].slice(0,12).map(n=>({shape:shape(n),date:n.getAttribute("data-date"),visible:vis(n)}))
+  };
+  const tableEvidence=[...document.querySelectorAll("table")].filter(vis).slice(0,10).map(t=>({shape:shape(t),parent:shape(t.parentElement),rowCount:t.rows.length,rows:[...t.rows].slice(0,8).map(r=>[...r.cells].map(c=>({shape:shape(c),text:clean(c.innerText).slice(0,100),rowSpan:c.rowSpan,colSpan:c.colSpan,children:[...c.children].slice(0,5).map(shape)})))}));
   const radios=[...document.querySelectorAll("input[type=radio],.timetable-nav-item")].map(e=>({shape:shape(e),text:clean(e.innerText||e.labels?.[0]?.innerText).slice(0,80),checked:e.checked,visible:vis(e)})).slice(0,40);
   const anchorEvidence=[...document.querySelectorAll("a[href]")].filter(vis).map(a=>({link:linkInfo(a),chain:[shape(a.parentElement),shape(a.parentElement?.parentElement),shape(a.parentElement?.parentElement?.parentElement),shape(a.parentElement?.parentElement?.parentElement?.parentElement)]})).filter(x=>x.link).slice(0,80);
   const minute=s=>{const m=String(s||"").match(/^(\d{1,2}):([0-5]\d)$/);return m&&+m[1]<=29?+m[1]*60+ +m[2]:null;};
@@ -122,19 +150,35 @@ async function extract(page,id,date){
    if(id!=="fm_yokohama"&&start<300)start+=1440;
    if(end<start)end+=1440;
    if(end<=start||end>1740)return [];
-   return [{name:r.titles[0],start,end,radiko:r.links.length===1?r.links[0]:null}];
+   const radiko=r.links.length===1?r.links[0]:null;
+   let startAt=null,endAt=null,radikoTimeMatches=null;
+   if(date){
+    const base=Date.parse(date+"T00:00:00+09:00");
+    const iso=m=>new Date(base+m*60000+9*3600000).toISOString().slice(0,19)+"+09:00";
+    startAt=iso(start);endAt=iso(end);
+    if(radiko)radikoTimeMatches=radiko.t===startAt.slice(0,19).replace(/\D/g,"");
+   }
+   return [{name:r.titles[0],start,end,startAt,endAt,radiko,radikoTimeMatches,endSource:"explicit"}];
   });
+  // Start-only tables are reported separately; the next start is not an observed end.
+  const startOnly=rows.filter(r=>r.times.length===1&&r.titles.length===1).map(r=>({name:r.titles[0],start:minute(r.times[0])})).filter(r=>r.start!==null).map(r=>({...r,start:id!=="fm_yokohama"&&r.start<300?r.start+1440:r.start})).sort((a,b)=>a.start-b.start);
+  const inferredSlots=startOnly.map((r,i)=>({...r,end:startOnly[i+1]?.start??null,endSource:"next_start_inferred"}));
   const sorted=[...candidateSlots].sort((a,b)=>a.start-b.start||b.end-a.end);
   let cursor=id==="fm_yokohama"?0:300;const gaps=[],overlaps=[];
   for(const r of sorted){if(r.start>cursor)gaps.push([cursor,r.start]);if(r.start<cursor)overlaps.push([r.start,Math.min(cursor,r.end),r.name]);cursor=Math.max(cursor,r.end);}
   const limit=id==="fm_yokohama"?1440:1740;if(cursor<limit)gaps.push([cursor,limit]);
-  return {requestedDate:date,selected,radios,rootCount:roots.length,candidateCount:rows.length,candidateSlots:sorted,gaps,overlaps,anchorEvidence,rows,classification:"diagnostic_only"};
+  return {requestedDate:date,selected,radios,dateEvidence,rootCount:roots.length,candidateCount:rows.length,candidateSlots:sorted,inferredSlots,gaps,overlaps,anchorEvidence,rows,detailEvidence,linkHierarchy,tableEvidence,classification:"diagnostic_only"};
  },{id,date});
 }
 async function reportExtraction(page,id,label,date){
  const evidence=await extract(page,id,date);
- console.log("OFFICIAL_PROGRAM_CANDIDATES",id,label,JSON.stringify(evidence));
- return {candidateCount:evidence.candidateCount,slotCount:evidence.candidateSlots.length,gaps:evidence.gaps.length,overlaps:evidence.overlaps.length};
+ const {detailEvidence,linkHierarchy,tableEvidence,...compact}=evidence;
+ console.log("OFFICIAL_PROGRAM_CANDIDATES",id,label,JSON.stringify(compact));
+ // Separate hierarchy logs to keep each log line manageable.
+ for(const [index,chain] of detailEvidence.entries())console.log("OFFICIAL_ROOT_HIERARCHY",id,label,index,JSON.stringify(chain));
+ for(const [index,chain] of linkHierarchy.entries())console.log("OFFICIAL_LINK_HIERARCHY",id,label,index,JSON.stringify(chain));
+ if(tableEvidence.length)console.log("OFFICIAL_TABLE_EVIDENCE",id,label,JSON.stringify(tableEvidence));
+ return {candidateCount:evidence.candidateCount,slotCount:evidence.candidateSlots.length,inferredCount:evidence.inferredSlots.length,gaps:evidence.gaps.length,overlaps:evidence.overlaps.length,radikoMatched:evidence.candidateSlots.filter(r=>r.radikoTimeMatches===true).length,radikoMismatch:evidence.candidateSlots.filter(r=>r.radikoTimeMatches===false).length,signature:JSON.stringify(evidence.candidateSlots.map(r=>[r.name,r.start,r.end]))};
 }
 async function visit(page,id,label,url,date){
  const r=await page.goto(url,{waitUntil:"domcontentloaded",timeout:35000});
@@ -171,11 +215,12 @@ async function main(){
     catch(e){const error=String(e.message).slice(0,300);checks.push({label,status:"error",error});if(/HTTP (401|403|429)/.test(error)){blocked=true;break;}}
     finally{await page.close();await new Promise(r=>setTimeout(r,4000));}
    }
-   if(!blocked&&["fm_osaka","alpha_station","fm_yokohama","tokai_radio"].includes(id)){
+   if(!blocked&&["fm_osaka","alpha_station","fm_yokohama","tokai_radio","date_fm"].includes(id)){
     const page=await context.newPage();
     try{
      if(id==="fm_yokohama"){
-      await page.goto("https://www.fmyokohama.co.jp/songsearch/program-form.html",{waitUntil:"domcontentloaded",timeout:35000});
+      const response=await page.goto("https://www.fmyokohama.co.jp/songsearch/program-form.html",{waitUntil:"domcontentloaded",timeout:35000});
+      if(!response?.ok())throw Error("HTTP "+response?.status());
       const [y,m,day]=yesterday.split("-");
       for(const [selector,v] of [["#ReqYear",y],["#ReqMon",m],["#ReqDay",day]])await page.locator(selector).filter({visible:true}).selectOption(v,{timeout:10000});
       await page.locator(".program-wrap .program-sort-btn a").filter({visible:true,hasText:/^次へ$/}).click({timeout:10000});
@@ -183,7 +228,7 @@ async function main(){
       const response=await page.goto(stations[id],{waitUntil:"domcontentloaded",timeout:35000});
       if(!response?.ok())throw Error("HTTP "+response?.status());
       await page.waitForTimeout(4000);
-      const target=id==="alpha_station"?tomorrow:yesterday;
+      const target=["alpha_station","date_fm"].includes(id)?tomorrow:yesterday;
       const [,m,day]=target.split("-");
       const label=String(Number(m))+"/"+String(Number(day));
       let control;
@@ -197,13 +242,16 @@ async function main(){
       await control.click({timeout:10000});
      }
      await page.waitForTimeout(6000);
-     const date=id==="alpha_station"?tomorrow:yesterday;
+     const date=["alpha_station","date_fm"].includes(id)?tomorrow:yesterday;
      const snap=await snapshot(page);
      console.log("OFFICIAL_DOM",id,"date_ui",JSON.stringify(snap));
      checks.push({label:"date_ui",status:"inspected",...await reportExtraction(page,id,"date_ui",date)});
     }catch(e){checks.push({label:"date_ui",status:"error",error:String(e.message).slice(0,300)});}
     finally{await page.close();await new Promise(r=>setTimeout(r,4000));}
    }
+   const baseCheck=checks.find(c=>c.label==="base");
+   for(const c of checks){if(c.signature!==undefined){c.sameSlotsAsBase=!!baseCheck&&c.signature===baseCheck.signature;}}
+   for(const c of checks)delete c.signature;
    results.push({id,checks});
   }
  }finally{await browser.close();}
