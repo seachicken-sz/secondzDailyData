@@ -26,34 +26,56 @@ async function collect(page,station,date) {
     const opt=candidate.selects[i].find(o=>Number(o.text.replace(/[^0-9]/g,""))===target[i]);
     await locator.locator("select").nth(i).selectOption(opt.value);
   }
-  const controls=locator.locator('a,button,input[type=submit],input[type=button],input[type=image],[role=button]');
-  const matches=[];
-  const diagnostics=[];
-  for(let i=0;i<await controls.count();i++){
-    const control=controls.nth(i);
-    if(!await control.isVisible()) continue;
-    const info=await control.evaluate(e=>({
-      tag:e.tagName,type:e.getAttribute("type")||"",
-      label:[e.innerText,e.getAttribute("value"),e.getAttribute("alt"),e.getAttribute("aria-label"),e.getAttribute("title"),...Array.from(e.querySelectorAll("img")).map(img=>img.alt)].filter(Boolean).join(" ").trim(),
-      image:(e.getAttribute("src")||e.querySelector("img")?.getAttribute("src")||"").split("/").pop().split("?")[0]
-    }));
-    diagnostics.push(info);
-    if(/^(GO|検索|日付で検索)(\s+(GO|検索|日付で検索))*$/i.test(info.label)||/^(btn[_-]?)?go(?:[_-][a-z0-9]+)?\.(gif|png|jpg|svg)$/i.test(info.image))matches.push(i);
+  // The HTML form may wrap only the selects (legacy table markup).
+  // Search the nearest enclosing section, never an unrelated GO button.
+  const selection=await locator.evaluate(f=>{
+    const clean=s=>String(s||"").replace(/\s+/g," ").trim();
+    const selector='a,button,input[type=submit],input[type=button],input[type=image],[role=button],[onclick],img';
+    const visible=e=>!!(e.getClientRects().length && getComputedStyle(e).visibility!=="hidden");
+    const info=e=>({
+      tag:e.tagName,id:e.id,cls:typeof e.className==="string"?e.className:"",
+      label:clean([e.innerText,e.getAttribute("value"),e.getAttribute("alt"),e.getAttribute("aria-label"),e.getAttribute("title"),...Array.from(e.querySelectorAll("img")).map(i=>i.alt)].filter(Boolean).join(" ")),
+      image:(e.getAttribute("src")||e.querySelector("img")?.getAttribute("src")||"").split("/").pop().split("?")[0],
+      onclick:!!e.getAttribute("onclick")
+    });
+    const isGo=x=>/^(GO|検索|日付で検索)(\s+(GO|検索|日付で検索))*$/i.test(x.label)||/^(?:btn[_-]?)?go(?:[_-][a-z0-9]+)?\.(gif|png|jpg|svg)$/i.test(x.image);
+    const levels=[];
+    for(let scope=f;scope&&scope!==document.body;scope=scope.parentElement){
+      const otherSelects=[...scope.querySelectorAll("select")].filter(s=>!f.contains(s));
+      if(otherSelects.length)break;
+      const elements=[...scope.querySelectorAll(selector)].filter(visible);
+      const matching=elements.filter(e=>isGo(info(e)));
+      const unique=matching.filter(e=>!matching.some(other=>other!==e&&other.contains(e)));
+      levels.push({tag:scope.tagName,id:scope.id,cls:scope.className,controls:elements.slice(0,12).map(info)});
+      if(unique.length===1){
+        unique[0].setAttribute("data-radio-date-submit","1");
+        return {found:true,levels};
+      }
+      if(unique.length>1)break;
+      const native=elements.filter(e=>e.matches('input[type=submit],button[type=submit],input[type=image]')&&e.form===f);
+      if(native.length===1){
+        native[0].setAttribute("data-radio-date-submit","1");
+        return {found:true,levels};
+      }
+    }
+    return {found:false,levels,form:{id:f.id,name:f.name,children:[...f.children].map(e=>e.tagName)},outside:[...document.querySelectorAll(selector)].filter(visible).map(info).filter(isGo).slice(0,12)};
+  });
+  if(!selection.found){
+    console.error("JFN date control DOM:",JSON.stringify(selection));
+    throw new Error("Date submit not recognized: see JFN date control DOM in Actions log");
   }
-  const native=locator.locator('input[type=submit]:visible,button[type=submit]:visible,button:not([type]):visible,input[type=image]:visible');
-  if(matches.length===1) await controls.nth(matches[0]).click();
-  else if(matches.length===0 && await native.count()===1) await native.click();
-  else throw new Error("Date submit not recognized: "+JSON.stringify({matches:matches.length,controls:diagnostics}).slice(0,420));
+  await page.locator('[data-radio-date-submit="1"]').click();
   const datePattern=new RegExp(target[0]+"年\\s*0?"+target[1]+"月\\s*0?"+target[2]+"日");
   await page.waitForFunction(p=>[...document.querySelectorAll("h2,h3,h4,h5")].some(e=>new RegExp(p).test(e.textContent)),datePattern.source,{timeout:15000}).catch(async()=>{const headings=await page.locator("h2,h3,h4,h5").allTextContents();throw new Error("Result date not confirmed: "+JSON.stringify(headings).slice(0,350));});
   const result=await page.evaluate(()=>{
     const clean=s=>s.replace(/\s+/g," ").trim();
     const tables=[...document.querySelectorAll("table")].filter(t=>[...t.rows].some(r=>/TIME/i.test(r.innerText)&&/TITLE/i.test(r.innerText)&&/ARTIST/i.test(r.innerText)));
-    if(tables.length!==1) return null;
+    if(!tables.length) return null;
     const rows=[];
-    for(const r of tables[0].rows){
+    for(const r of new Set(tables.flatMap(t=>[...t.rows]))){
       const c=[...r.cells].map(e=>clean(e.innerText));
       if(!c.length || !/^\d{1,2}:\d{2}$/.test(c[0])) continue;
+      if(r.cells.length===1 && r.cells[0].colSpan>1) continue;
       if(c.length<3 || !c[1] || !c[2]) return null;
       rows.push({time:c[0],song_name:c[1],artist_name:c[2]});
     }

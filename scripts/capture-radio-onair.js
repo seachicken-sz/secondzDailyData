@@ -15,9 +15,16 @@ async function main(){
   try{
     for(const station of items){
       const dates=jstDates(Math.min(7,Math.max(1,Number(station.lookback_days)||3)));
+      let blockedReason="";
       for(const target_date of dates){
         const log={run_id,run_url,station_id:station.station_id,target_date};
         const collector=Object.hasOwn(collectors,station.collector_type)?collectors[station.collector_type]:null;
+        if(blockedReason){
+          skipped++;
+          await gas("recordFetchLog",{...log,status:"skipped",error_message:blockedReason});
+          console.log(station.station_id,target_date,"skipped:",blockedReason);
+          continue;
+        }
         if(!collector){
           skipped++;
           await gas("recordFetchLog",{...log,status:"skipped",error_message:"Collector not implemented"});
@@ -36,7 +43,7 @@ async function main(){
           const message=String(e.message).slice(0,500);
           console.error(station.station_id,target_date,message);
           await gas("recordFetchLog",{...log,status:"error",error_message:message});
-          if(/HTTP (401|403|429)/.test(message)) break;
+          if(/HTTP (401|403|429)|Date (form|submit) not recognized|Unverified song table/.test(message)) blockedReason=("Earlier date failed: "+message).slice(0,500);
         }finally{if(page)await page.close();}
         await new Promise(r=>setTimeout(r,4000));
       }
