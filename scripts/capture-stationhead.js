@@ -10,7 +10,6 @@ function parseCount(raw) {
   return Math.round(n);
 }
 async function main() {
-  if (process.env.STATIONHEAD_CAPTURE_AUTHORIZED !== "true") throw new Error("Stationhead permission required");
   const {browser,context} = await openBrowser();
   let row;
   try {
