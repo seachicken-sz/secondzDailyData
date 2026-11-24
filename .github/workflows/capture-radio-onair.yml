@@ -8,6 +8,11 @@ concurrency:
   cancel-in-progress: false
 jobs:
   capture:
+    name: Capture (${{ matrix.group }})
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [standard, fm_yokohama]
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     steps:
@@ -19,6 +24,7 @@ jobs:
       - run: npx playwright install --with-deps chromium
       - name: Capture and sync
         env:
+          RADIO_CAPTURE_GROUP: ${{ matrix.group }}
           RADIO_WEB_APP_URL: ${{ secrets.RADIO_WEB_APP_URL }}
           RADIO_SYNC_TOKEN: ${{ secrets.RADIO_SYNC_TOKEN }}
         run: node scripts/capture-radio-onair.js
@@ -26,7 +32,7 @@ jobs:
         if: ${{ always() && github.event.repository.private == true }}
         uses: actions/upload-artifact@v4
         with:
-          name: radio-pending-${{ github.run_id }}-${{ github.run_attempt }}
-          path: radio-recovery/pending.json
+          name: radio-pending-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.group }}
+          path: radio-recovery/${{ matrix.group }}/pending.json
           if-no-files-found: ignore
           retention-days: 3

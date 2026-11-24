@@ -19,7 +19,14 @@ async function retry(action,extra){
     }
   }
 }
-const checkpointPath=path.join("radio-recovery","pending.json");
+const captureGroup=process.env.RADIO_CAPTURE_GROUP||"all";
+if(!["all","standard","fm_yokohama"].includes(captureGroup))throw new Error("Invalid RADIO_CAPTURE_GROUP");
+function selectStations(items,group){
+  if(group==="all")return items;
+  if(!["standard","fm_yokohama"].includes(group))throw new Error("Invalid capture group");
+  return items.filter(station=>(station.station_id==="fm_yokohama")===(group==="fm_yokohama"));
+}
+const checkpointPath=path.join("radio-recovery",captureGroup==="all"?"pending.json":captureGroup+"/pending.json");
 function checkpoint(state){
   fs.mkdirSync(path.dirname(checkpointPath),{recursive:true,mode:0o700});
   fs.writeFileSync(checkpointPath+".tmp",JSON.stringify(state),{mode:0o600});
@@ -75,8 +82,9 @@ async function flush(state,batch){
 }
 async function main(){
   const config=await retry("list");
-  const {items}=config;
-  if(!Array.isArray(items))throw new Error("Invalid station list");
+  if(!Array.isArray(config.items))throw new Error("Invalid station list");
+  const items=selectStations(config.items,captureGroup);
+  console.log("Capture group:",captureGroup,"stations:",items.map(s=>s.station_id).join(", "));
   const batch=config.batch_version===1;
   console.log("Sync mode:",batch?"batch v1":"legacy compatible");
   const state={version:1,data:[],logs:[]};
@@ -86,6 +94,7 @@ async function main(){
     const saved=JSON.parse(fs.readFileSync(source,"utf8"));
     if(saved.version!==1||!Array.isArray(saved.data)||!Array.isArray(saved.logs))throw new Error("Invalid recovery JSON");
     if(!batch)throw new Error("Resume requires batch v1");
+    if(captureGroup!=="all"&&[...saved.data,...saved.logs].some(e=>selectStations([e],captureGroup).length!==1))throw new Error("Recovery JSON contains stations outside capture group");
     state.data=saved.data;state.logs=saved.logs;
     checkpoint(state);
     const syncFailures=await flush(state,batch);
@@ -138,7 +147,7 @@ async function main(){
   finally{await browser.close().catch(e=>console.warn("Browser close",errorText(e)));}
   // Collection and sync have distinct error counters and no per-date network dependency.
   const syncFailures=await flush(state,batch);
-  console.log({succeeded,skipped,failures,syncFailures,pendingData:state.data.length,pendingLogs:state.logs.length});
+  console.log({captureGroup,succeeded,skipped,failures,syncFailures,pendingData:state.data.length,pendingLogs:state.logs.length});
   if(!state.data.length&&!state.logs.length)fs.rmSync(checkpointPath,{force:true});
   if(fatal)throw fatal;
   if(failures||syncFailures)throw new Error(failures+" capture failures; "+syncFailures+" sync failures");
