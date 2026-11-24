@@ -1,0 +1,21 @@
+name: Debug Radio On Air
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: debug-radio-onair
+  cancel-in-progress: false
+jobs:
+  inspect:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: npm install
+      - run: npx playwright install --with-deps chromium
+      - name: Inspect public search page
+        run: node scripts/debug-radio-onair.js
