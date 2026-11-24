@@ -1,6 +1,24 @@
 name: Debug Radio On Air
 on:
   workflow_dispatch:
+    inputs:
+      station:
+        description: "all = nine unsupported stations; jfn = TOKYO FM"
+        required: true
+        type: choice
+        default: all
+        options:
+          - all
+          - jfn
+          - fm802
+          - fm_cocolo
+          - tokai_radio
+          - fm_yokohama
+          - nack5
+          - interfm
+          - crossfm
+          - fmfuji
+          - alpha_station
 permissions:
   contents: read
 concurrency:
@@ -9,7 +27,7 @@ concurrency:
 jobs:
   inspect:
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -17,5 +35,12 @@ jobs:
           node-version: '24'
       - run: npm install
       - run: npx playwright install --with-deps chromium
-      - name: Inspect public search page
-        run: node scripts/debug-radio-onair.js
+      - name: Inspect public search pages
+        env:
+          DEBUG_STATION: ${{ inputs.station }}
+        run: |
+          if [ "$DEBUG_STATION" = jfn ]; then
+            node scripts/debug-radio-onair.js
+          else
+            node scripts/debug-radio-stations.js "$DEBUG_STATION"
+          fi
