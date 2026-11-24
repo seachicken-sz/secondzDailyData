@@ -11,6 +11,7 @@ on:
           - all
           - jfn
           - fm_yokohama
+          - fm_yokohama_history
           - crossfm
           - alpha_station
 permissions:
@@ -35,6 +36,8 @@ jobs:
         run: |
           if [ "$DEBUG_STATION" = jfn ]; then
             node scripts/debug-radio-onair.js
+          elif [ "$DEBUG_STATION" = fm_yokohama_history ]; then
+            node scripts/debug-fm-yokohama-history.js
           else
             node scripts/debug-radio-stations.js "$DEBUG_STATION"
           fi
