@@ -22,3 +22,11 @@ jobs:
           RADIO_WEB_APP_URL: ${{ secrets.RADIO_WEB_APP_URL }}
           RADIO_SYNC_TOKEN: ${{ secrets.RADIO_SYNC_TOKEN }}
         run: node scripts/capture-radio-onair.js
+      - name: Retain pending sync data (private repositories only)
+        if: ${{ always() && github.event.repository.private == true }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: radio-pending-${{ github.run_id }}-${{ github.run_attempt }}
+          path: radio-recovery/pending.json
+          if-no-files-found: ignore
+          retention-days: 3

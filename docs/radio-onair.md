@@ -1,4 +1,11 @@
 # Radio on-air capture
 GAS dispatches capture-radio-onair.yml on main; no cron. Configure RADIO_WEB_APP_URL and RADIO_SYNC_TOKEN secrets.
 The GAS endpoint accepts POST JSON action/token: list returns items; upsertOnair accepts run_id, run_url, station_id, target_date, fetched_count, items; recordFetchLog accepts run_id, run_url, station_id, target_date, status, error_message.
-Initial JFN collector is conservative and not live-tested. All stations must remain disabled until permission and date/pagination/DOM checks are completed. Other collectors are not implemented yet. No public redistribution. Existing scripts unchanged.
+
+## Batch sync v1
+The list response advertises batch_version: 1 only after both new authenticated actions are deployed.
+upsertOnairBatch and recordFetchLogsBatch accept {entries:[...]} with legacy action payloads (no token inside entries).
+Both return {ok:true,results:[{station_id,target_date,ok:true|false,error?}, ...]} in input order. Each entry must be independently validated; failed entries must not stop the rest. Preserve onair_id deduplication and deduplicate fetch logs by run_id/station_id/target_date/status before enabling retry. Existing upsertOnair records success logs; recordFetchLogsBatch receives error/skipped logs only.
+Without capability advertisement the client uses the old actions after collection, catching each sync failure independently. Batch mode retries transient errors up to three attempts. No batch retry should be enabled until GAS idempotency is verified.
+Pending payloads are checkpointed in radio-recovery/pending.json. Private repositories only upload this file on failure for 3 days; public repositories deliberately do not upload song data. The runner's temporary files disappear after the job. To replay an authorized local copy, node scripts/capture-radio-onair.js --resume path/to/pending.json with batch v1 enabled and GAS credentials in environment. Do not commit recovery files. Success and failure counts distinguish capture from sync.
+JFN nine stations have passed live collection; other collectors are not implemented yet. Confirm permission for collection/storage, data completeness and terms before scheduling. No public redistribution.
