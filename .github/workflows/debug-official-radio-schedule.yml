@@ -1,0 +1,44 @@
+name: Debug Official Radio Schedule
+on:
+  workflow_dispatch:
+    inputs:
+      station:
+        description: "Official station timetable only"
+        required: true
+        type: choice
+        default: all
+        options:
+          - all
+          - tokyo_fm
+          - fm_osaka
+          - fm_fukuoka
+          - fm_niigata
+          - date_fm
+          - fm_aichi
+          - kiss_fm
+          - e_radio
+          - kmix
+          - tokai_radio
+          - fm_yokohama
+          - nack5
+          - alpha_station
+permissions:
+  contents: read
+concurrency:
+  group: debug-official-radio-schedule
+  cancel-in-progress: false
+jobs:
+  inspect:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: npm install
+      - run: npx playwright install --with-deps chromium
+      - name: Inspect official timetables
+        env:
+          DEBUG_STATION: ${{ inputs.station }}
+        run: node scripts/debug-official-radio-schedule.js "$DEBUG_STATION"
