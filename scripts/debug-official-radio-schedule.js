@@ -109,9 +109,19 @@ async function extract(page,id,date){
    }
    const timeTexts=[...new Set(timeNodes.map(n=>clean(n.innerText)))];
    const ownLinks=[...e.querySelectorAll("a[href]")].filter(vis).map(linkInfo).filter(Boolean);
-   const titleSelector=({tokyo_fm:":scope > .table_main > .table_ttl",kmix:":scope > .tableProgram__Main > .tableTtl .programTitle, :scope > .tableProgram__Main > .tableTtl h2, :scope > .tableProgram__Main > .tableTtl h3",fm_niigata:":scope > .right-content .title",fm_fukuoka:":scope > .program > .p_title",kiss_fm:".pg_name",fm_aichi:".main_color",tokai_radio:":scope > h2",nack5:":scope > .program-item-header .program-title, :scope > .program-item-header .program-name, :scope > .program-item-header h2"}[id])||"h2,h3,h4,.program-title,.program-name,.program_title,.program_name,.title,.p_title,td.title,.programTitle,[class*='programName'],[class*='programTitle'],[class*='table_title'],[class*='tableTitle']";
+   const titleSelector=({tokyo_fm:":scope > .table_main > .table_ttl",kmix:":scope > .tableProgram__Main > .tableTtl .programTitle, :scope > .tableProgram__Main > .tableTtl h2, :scope > .tableProgram__Main > .tableTtl h3",fm_niigata:":scope > .right-content .title",fm_fukuoka:":scope > .program > .p_title",kiss_fm:".pg_name",fm_aichi:".main_color",tokai_radio:":scope > .ttDtl h2",nack5:":scope > .program-item-body:not(.program-insert) .program-title, :scope > .program-item-body:not(.program-insert) .program-name, :scope > .program-item-body:not(.program-insert) h2, :scope > .program-item-body:not(.program-insert) .title"}[id])||"h2,h3,h4,.program-title,.program-name,.program_title,.program_name,.title,.p_title,td.title,.programTitle,[class*='programName'],[class*='programTitle'],[class*='table_title'],[class*='tableTitle']";
    const titleNodes=[...e.querySelectorAll(titleSelector)].filter(vis).filter(n=>!n.closest(".tt_corner,.corner,.corners,.corner-pro,.program-corner,.programDetail"));
-   const titles=[...new Set(titleNodes.map(n=>clean(n.innerText)).filter(Boolean))].slice(0,5);
+   let titles=[...new Set(titleNodes.map(n=>clean(n.innerText)).filter(Boolean))].slice(0,5);
+   if(id==="tokai_radio"&&titles.length)titles=titles.slice(0,1);
+   if(id==="fm_yokohama"&&!e.matches("tr")){
+    const h=e.querySelector(":scope > .program-head");
+    titles=h?[...new Set([...h.querySelectorAll("h2,h3,h4,.title,.program-title,.program-name")].map(n=>clean(n.innerText)).filter(Boolean))]:[];
+   }
+   if(id==="e_radio"){
+    const cell=e.querySelector(":scope > td");
+    const name=cell?clean([...cell.childNodes].filter(n=>n.nodeType===3).map(n=>n.textContent).join(" ")):"";
+    titles=name?[name]:[];
+   }
    const leaves=[...e.querySelectorAll("*")].filter(n=>n.children.length===0&&vis(n)&&!n.closest(".tt_corner,.corner,.corners,.corner-pro,.program-corner,.programDetail")).map(n=>({text:clean(n.innerText).slice(0,100),...shape(n)})).filter(n=>n.text).slice(0,18);
    const times=timeTexts.flatMap(t=>t.match(timeRx)||[]);
    if(!times.length&&!ownLinks.length&&!leaves.some(n=>/^\d{1,2}:\d{2}/.test(n.text)))continue;
@@ -122,6 +132,14 @@ async function extract(page,id,date){
   const describe=n=>({...shape(n),text:clean(n.innerText).slice(0,160),directText:clean([...n.childNodes].filter(c=>c.nodeType===3).map(c=>c.textContent).join(" ")).slice(0,100),visible:vis(n),children:[...n.children].slice(0,12).map(c=>({...shape(c),text:clean(c.innerText).slice(0,100),visible:vis(c)}))});
   const hierarchy=n=>{const chain=[];for(let j=0;n&&j<7;j++,n=n.parentElement)chain.push(describe(n));return chain;};
   const detailEvidence=roots.slice(0,3).map(hierarchy);
+  const structureEvidence=["tokai_radio","nack5","fm_yokohama"].includes(id)?roots.slice(0,4).map(root=>{
+   const r=id==="tokai_radio"?root.parentElement:root;
+   return {root:shape(r),nodes:[...r.querySelectorAll("h1,h2,h3,h4,[class*='title' i],[class*='name' i],.program-head,.ttDtl,.program-item-body")].slice(0,35).map(n=>({shape:shape(n),parent:shape(n.parentElement),text:clean(n.innerText).slice(0,120)}))};
+  }):[];
+  const weeklyEvidence=id==="e_radio"?[...document.querySelectorAll("body *")].filter(n=>n.children.length===0&&/^\d{1,2}:\d{2}\s*[-~〜～–]\s*\d{1,2}:\d{2}$/.test(clean(n.textContent))).slice(0,120).map(n=>{
+   let p=n;const chain=[];for(let i=0;p&&i<5;i++,p=p.parentElement)chain.push({shape:shape(p),text:clean(p.innerText||p.textContent).slice(0,220),children:[...p.children].slice(0,10).map(c=>({shape:shape(c),text:clean(c.innerText||c.textContent).slice(0,120)}))});
+   return {time:clean(n.textContent),visible:vis(n),chain};
+  }):[];
   const linkHierarchy=[...document.querySelectorAll("a[href]")].filter(vis).filter(a=>linkInfo(a)).slice(0,3).map(hierarchy);
   const dateEvidence={
    url:location.href,
@@ -157,24 +175,38 @@ async function extract(page,id,date){
    return [{name:r.titles[0],start,end,startAt,endAt,radiko,radikoTimeMatches,endSource:"explicit"}];
   });
   // Start-only tables are reported separately; the next start is not an observed end.
-  const startOnly=rows.filter(r=>r.times.length===1&&r.titles.length===1).map(r=>({name:r.titles[0],start:minute(r.times[0])})).filter(r=>r.start!==null).map(r=>({...r,start:id!=="fm_yokohama"&&r.start<300?r.start+1440:r.start})).sort((a,b)=>a.start-b.start);
-  const inferredSlots=startOnly.map((r,i)=>({...r,end:startOnly[i+1]?.start??null,endSource:"next_start_inferred"}));
+  const startOnly=rows.filter(r=>r.times.length===1&&r.titles.length===1).map(r=>({name:r.titles[0],start:minute(r.times[0]),radiko:r.links.length===1?r.links[0]:null})).filter(r=>r.start!==null).map(r=>({...r,start:id!=="fm_yokohama"&&r.start<300?r.start+1440:r.start}));
+  const terminalAichi=id==="fm_aichi"&&rows.length===startOnly.length+1&&rows.at(-1)?.times[0]==="05:00"&&rows.at(-1)?.leaves.some(n=>/曜日の番組表/.test(n.text));
+  const strictStartOrder=startOnly.every((r,i)=>i===0||r.start>startOnly[i-1].start);
+  const completeStarts=["fm_fukuoka","fm_niigata","fm_aichi"].includes(id)&&startOnly.length>1&&startOnly[0].start===300&&strictStartOrder&&startOnly.at(-1).start<1740&&(rows.length===startOnly.length||terminalAichi)&&roots.length===rows.length;
+  const inferredSlots=startOnly.map((r,i)=>{
+   const end=startOnly[i+1]?.start??(completeStarts?1740:null);
+   const base=date?Date.parse(date+"T00:00:00+09:00"):NaN;
+   const iso=m=>Number.isFinite(base)&&m!==null?new Date(base+m*60000+9*3600000).toISOString().slice(0,19)+"+09:00":null;
+   const t=r.radiko?.t,m=t?.match(/^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})$/);
+   const rt=m&&+m[4]<=29&&+m[5]<60&&+m[6]<60?Date.parse(m[1]+"-"+m[2]+"-"+m[3]+"T00:00:00+09:00")+(+m[4]*3600+ +m[5]*60+ +m[6])*1000:NaN;
+   return {...r,end,startAt:iso(r.start),endAt:iso(end),radikoTimeMatches:r.radiko&&date?rt===base+r.start*60000:null,endSource:i===startOnly.length-1?(terminalAichi?"next_day_marker":completeStarts?"broadcast_day_boundary_assumed":"unknown"):"next_start_inferred"};
+  });
+  const inferenceValidation={strictStartOrder,completeStarts,terminalAichi,missingTitles:rows.length-startOnly.length,radikoMatched:inferredSlots.filter(r=>r.radikoTimeMatches===true).length,radikoMismatch:inferredSlots.filter(r=>r.radikoTimeMatches===false).length};
   const sorted=[...candidateSlots].sort((a,b)=>a.start-b.start||b.end-a.end);
   let cursor=id==="fm_yokohama"?0:300;const gaps=[],overlaps=[];
   for(const r of sorted){if(r.start>cursor)gaps.push([cursor,r.start]);if(r.start<cursor)overlaps.push([r.start,Math.min(cursor,r.end),r.name]);cursor=Math.max(cursor,r.end);}
   const limit=id==="fm_yokohama"?1440:1740;if(cursor<limit)gaps.push([cursor,limit]);
-  return {requestedDate:date,selected,radios,dateEvidence,dateControls,rootCount:roots.length,candidateCount:rows.length,candidateSlots:sorted,inferredSlots,gaps,overlaps,anchorEvidence,rows,detailEvidence,linkHierarchy,tableEvidence,classification:"diagnostic_only"};
+  return {requestedDate:date,selected,radios,dateEvidence,dateControls,rootCount:roots.length,candidateCount:rows.length,candidateSlots:sorted,inferredSlots,inferenceValidation,gaps,overlaps,anchorEvidence,rows,detailEvidence,linkHierarchy,tableEvidence,structureEvidence,weeklyEvidence,classification:"diagnostic_only"};
  },{id,date});
 }
 async function reportExtraction(page,id,label,date){
  const evidence=await extract(page,id,date);
- const {detailEvidence,linkHierarchy,tableEvidence,...compact}=evidence;
+ const {detailEvidence,linkHierarchy,tableEvidence,structureEvidence,weeklyEvidence,...compact}=evidence;
  console.log("OFFICIAL_PROGRAM_CANDIDATES",id,label,JSON.stringify(compact));
  // Separate hierarchy logs to keep each log line manageable.
  for(const [index,chain] of detailEvidence.entries())console.log("OFFICIAL_ROOT_HIERARCHY",id,label,index,JSON.stringify(chain));
  for(const [index,chain] of linkHierarchy.entries())console.log("OFFICIAL_LINK_HIERARCHY",id,label,index,JSON.stringify(chain));
  for(const [i,t] of tableEvidence.entries())console.log("OFFICIAL_TABLE_EVIDENCE",id,label,i,JSON.stringify(t));
- return {candidateCount:evidence.candidateCount,slotCount:evidence.candidateSlots.length,inferredCount:evidence.inferredSlots.length,gaps:evidence.gaps.length,overlaps:evidence.overlaps.length,radikoMatched:evidence.candidateSlots.filter(r=>r.radikoTimeMatches===true).length,radikoMismatch:evidence.candidateSlots.filter(r=>r.radikoTimeMatches===false).length,signature:JSON.stringify(evidence.candidateSlots.map(r=>[r.name,r.start,r.end]))};
+ for(const [i,t] of structureEvidence.entries())console.log("OFFICIAL_TITLE_STRUCTURE",id,label,i,JSON.stringify(t));
+ for(const [i,t] of weeklyEvidence.entries())console.log("E_RADIO_WEEKLY_STRUCTURE",label,i,JSON.stringify(t));
+ console.log("OFFICIAL_INFERENCE_VALIDATION",id,label,JSON.stringify(evidence.inferenceValidation));
+ return {candidateCount:evidence.candidateCount,slotCount:evidence.candidateSlots.length,inferredCount:evidence.inferredSlots.length,gaps:evidence.gaps.length,overlaps:evidence.overlaps.length,radikoMatched:evidence.candidateSlots.filter(r=>r.radikoTimeMatches===true).length,radikoMismatch:evidence.candidateSlots.filter(r=>r.radikoTimeMatches===false).length,inferenceValidation:evidence.inferenceValidation,weeklyEvidenceCount:weeklyEvidence.length,signature:JSON.stringify([...evidence.candidateSlots,...evidence.inferredSlots].map(r=>[r.name,r.start,r.end]))};
 }
 async function visit(page,id,label,url,date){
  const r=await page.goto(url,{waitUntil:"domcontentloaded",timeout:35000});
@@ -191,7 +223,7 @@ async function visit(page,id,label,url,date){
 }
 async function main(){
  const selected=process.argv[2]||"all";
- const ids=selected==="all"?Object.keys(stations):[selected];
+ const ids=selected==="all"?Object.keys(stations):selected==="remaining"?["fm_fukuoka","fm_niigata","fm_aichi","tokai_radio","nack5","fm_yokohama","e_radio"]:[selected];
  if(ids.some(id=>!Object.hasOwn(stations,id)))throw Error("Unknown station");
  const {browser,context}=await openBrowser();
  const today=jstDates(1)[0],yesterday=jstDates(2)[1],tomorrow=new Date(Date.parse(today+"T00:00:00Z")+86400000).toISOString().slice(0,10);
@@ -201,8 +233,8 @@ async function main(){
    const checks=[];
    const plans=[["base",stations[id],today]];
    for(const [label,d] of [["yesterday",yesterday],["today",today],["tomorrow",tomorrow]]){const url=datedUrl(id,d);if(url&&!(id==="date_fm"&&label==="yesterday"))plans.push([label,url,d]);}
-   if(id==="e_radio")plans.push(["schedule","https://www.e-radio.co.jp/timetable/",today]);
-   if(id==="fm_aichi")plans.push(["weekday","https://fma.co.jp/pc/01pro/tt/?p="+(new Date(yesterday+"T00:00:00Z").getUTCDay()||7),yesterday]);
+   if(id==="e_radio"){plans.length=0;plans.push(["weekly","https://www.e-radio.co.jp/timetable/",null],["remaining_today",stations[id],today]);}
+   if(id==="fm_aichi")for(const [label,d] of [["weekday_yesterday",yesterday],["weekday_tomorrow",tomorrow]])plans.push([label,"https://fma.co.jp/pc/01pro/tt/?p="+(new Date(d+"T00:00:00Z").getUTCDay()||7),d]);
    if(id==="alpha_station")plans.push(["weekly","https://fm-kyoto.jp/timetable_weekly/",null]);
    let blocked=false;
    for(const [label,url,date] of plans){

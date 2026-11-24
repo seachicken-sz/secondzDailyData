@@ -6,9 +6,10 @@ on:
         description: "Official station timetable only"
         required: true
         type: choice
-        default: all
+        default: remaining
         options:
           - all
+          - remaining
           - tokyo_fm
           - fm_osaka
           - fm_fukuoka
