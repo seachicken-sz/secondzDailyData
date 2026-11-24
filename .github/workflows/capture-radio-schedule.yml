@@ -1,0 +1,36 @@
+name: Capture Radio Schedule
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Validate without GAS writes"
+        type: boolean
+        default: true
+      station:
+        description: "Station ID or all"
+        type: string
+        default: all
+permissions:
+  contents: read
+concurrency:
+  group: capture-radio-schedule
+  cancel-in-progress: false
+jobs:
+  capture:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: npm install
+      - run: npx playwright install --with-deps chromium
+      - run: node --test scripts/radio/schedule/common.test.js
+      - name: Capture and sync
+        env:
+          RADIO_SCHEDULE_DRY_RUN: ${{ inputs.dry_run }}
+          RADIO_SCHEDULE_STATION: ${{ inputs.station }}
+          RADIO_WEB_APP_URL: ${{ secrets.RADIO_WEB_APP_URL }}
+          RADIO_SYNC_TOKEN: ${{ secrets.RADIO_SYNC_TOKEN }}
+        run: node scripts/capture-radio-schedule.js
