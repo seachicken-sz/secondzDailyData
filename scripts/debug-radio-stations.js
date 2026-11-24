@@ -225,19 +225,28 @@ async function probe(page,id,date){
   }
   if(id==="crossfm"){
     await visit(page,stations[id]);
-    await snapshot(page,id,"form");
-    const hour=await uniqueVisible(page,'select[name="selhour"]');
-    const opts=await hour.evaluate(e=>[...e.options].map(o=>({value:o.value,label:o.textContent.trim()})));
-    const all=opts.find(o=>o.value===""||/^(全時間|全日|指定なし|すべて|全て|時間指定なし)$/.test(o.label));
-    const values=[...(all?[{stage:"all_hours",value:all.value}]:[]),{stage:"hour12",value:"12"},{stage:"hour13",value:"13"},{stage:"hour00",value:"00"}];
+    const report=async(stage)=>{
+      await snapshot(page,id,stage);
+      const result=await page.evaluate(()=>{
+        const clean=s=>String(s||"").replace(/\s+/g," ").trim();
+        const table=document.querySelector("table.songs");
+        const rows=[...(table?.rows||[])].filter(r=>r.cells[0]?.tagName==="TD");
+        const heading=[...document.querySelectorAll(".p-genre")].find(e=>/オンエア曲/.test(e.innerText));
+        const parent=table?.parentElement||heading?.parentElement;
+        const links=[...(parent?.querySelectorAll("a,button,input")||[])].filter(e=>!e.closest("table.songs")&&e.getClientRects().length).map(e=>({tag:e.tagName,label:clean(e.innerText||e.value||e.getAttribute("alt")||e.querySelector("img")?.alt).slice(0,80),cls:e.className,href:e.tagName==="A"?e.getAttribute("href")?.slice(0,200):null}));
+        return {heading:clean(heading?.innerText),date:document.querySelector('[name="seldate"]')?.value,hour:document.querySelector('[name="selhour"]')?.value,tablePresent:!!table,headers:[...(table?.querySelectorAll("th")||[])].map(e=>clean(e.innerText)),rows:rows.length,invalidRows:rows.filter(r=>r.cells.length!==4||!/^\d{1,2}:\d{2}$/.test(clean(r.cells[0]?.innerText))).length,emptyMessage:rows.length===0?clean(parent?.innerText).slice(0,500):null,links:links.slice(0,30)};
+      });
+      console.log("CROSS_RESULT",stage,JSON.stringify(result));
+    };
+    await report("initial");
     let ok=true;
-    for(const item of values){
-      const success=await step(id,item.stage,async()=>{
+    for(const hour of ["00","05","06","12","13","14","15","23"]){
+      const success=await step(id,"hour"+hour,async()=>{
         await (await uniqueVisible(page,'select[name="seldate"]')).selectOption(date,{timeout:5000});
-        await (await uniqueVisible(page,'select[name="selhour"]')).selectOption(item.value,{timeout:5000});
+        await (await uniqueVisible(page,'select[name="selhour"]')).selectOption(hour,{timeout:5000});
         await submitFor(await uniqueVisible(page,'select[name="seldate"]'));
         await page.waitForTimeout(4000);
-        await snapshot(page,id,item.stage);
+        await report("hour"+hour);
       });
       if(!success){ok=false;break;}
       await page.waitForTimeout(3000);
@@ -245,48 +254,51 @@ async function probe(page,id,date){
     return ok;
   }
   if(id==="fm_yokohama"){
-    const timeOK=await step(id,"time_search",async()=>{
-      await visit(page,new URL("/songsearch/time-form.html",stations[id]).href);
-      await snapshot(page,id,"time_form");
-      for(const [sel,v] of Object.entries({"#ReqYear":y,"#ReqMon":m,"#ReqDay":d,"#HourSelect":"12","#MinSelect":"00"}))await (await uniqueVisible(page,sel)).selectOption(v,{timeout:5000});
-      await searchClick(page);
-      await snapshot(page,id,"time_result");
-    });
+    await visit(page,stations[id]);
     const programOK=await step(id,"program_search",async()=>{
-      await visit(page,stations[id]);
       const link=page.getByText("番組名で検索",{exact:true}).filter({visible:true});
       if(await link.count()!==1)throw Error("Program search link not unique");
       await link.click({timeout:10000});
       await page.waitForTimeout(3000);
-      await snapshot(page,id,"program_form");
-      for(const [sel,v] of Object.entries({"#ReqYear":y,"#ReqMon":m,"#ReqDay":d})){
-        const loc=page.locator(sel).filter({visible:true});
-        if(await loc.count()!==1)throw Error("Program date control not confirmed: "+sel);
-        await loc.selectOption(v,{timeout:5000});
+      for(const [sel,v] of Object.entries({"#ReqYear":y,"#ReqMon":m,"#ReqDay":d}))await (await uniqueVisible(page,sel)).selectOption(v,{timeout:5000});
+      const next=page.getByText("次へ",{exact:true}).filter({visible:true});
+      if(await next.count()!==1)throw Error("Next control not unique");
+      await next.click({timeout:10000});
+      await page.waitForTimeout(5000);
+      await snapshot(page,id,"program_after_next");
+      const details=await page.evaluate(()=>{
+        const clean=s=>String(s||"").replace(/\s+/g," ").trim();
+        const root=document.querySelector(".program-wrap");
+        const controls=[...(root?.querySelectorAll("a,button,select,input,[role=button]")||[])].filter(e=>e.getClientRects().length).map(e=>({tag:e.tagName,id:e.id,cls:e.className,name:e.name,label:clean(e.innerText||e.value||e.getAttribute("aria-label")).slice(0,100),options:e.tagName==="SELECT"?[...e.options].map(o=>({value:o.value,label:clean(o.textContent)})):undefined,parentClass:e.parentElement?.className}));
+        return {controls:controls.slice(0,80),programInfo:[...(root?.querySelectorAll(".program-info,.program,.table-title")||[])].slice(0,30).map(e=>({cls:e.className,text:clean(e.innerText).slice(0,120),children:[...e.children].map(c=>({tag:c.tagName,cls:c.className}))}))};
+      });
+      console.log("PROGRAM_CHOICES",JSON.stringify(details));
+      const selects=page.locator(".program-wrap select").filter({visible:true});
+      const choices=[];
+      for(const loc of await selects.all()){
+        const data=await loc.evaluate(e=>({name:e.name+" "+e.id,options:[...e.options].filter(o=>!o.disabled&&o.value&&!/選択|指定なし/.test(o.textContent)).map(o=>({value:o.value,label:o.textContent.trim()}))}));
+        if(/program|bangumi|番組/i.test(data.name)&&data.options.length)choices.push({loc,option:data.options[0]});
       }
-      await page.waitForTimeout(3000);
-      await snapshot(page,id,"program_date_selected");
-      const program=page.locator('select').filter({visible:true});
-      const candidates=[];
-      for(const loc of await program.all()){
-        const data=await loc.evaluate(e=>({name:e.name+" "+e.id,options:[...e.options].filter(o=>!o.disabled&&o.value&& !/選択|指定なし/.test(o.textContent)).map(o=>({value:o.value,label:o.textContent.trim()}))}));
-        if(/program|bangumi|番組/i.test(data.name)&&data.options.length)candidates.push({loc,option:data.options[0]});
-      }
-      if(candidates.length!==1)throw Error("Program select not confirmed");
-      const p=candidates[0];
-      await p.loc.selectOption(p.option.value,{timeout:5000});
+      if(choices.length!==1){console.log("PROGRAM_SELECTION_PENDING","Inspect PROGRAM_CHOICES for link or radio controls");return;}
+      const p=choices[0];await p.loc.selectOption(p.option.value,{timeout:5000});
       console.log("PROGRAM_SELECTED",p.option.label.slice(0,100));
       await searchClick(page);
       await snapshot(page,id,"program_result");
     });
-    return timeOK&&programOK;
+    const todayOK=await step(id,"today_list",async()=>{
+      await visit(page,new URL("/songsearch/today.html",stations[id]).href);
+      await snapshot(page,id,"today_list");
+      const info=await page.evaluate(()=>({rows:document.querySelectorAll(".table-4 .program-left").length,times:[...document.querySelectorAll(".table-4 .program-left .time")].map(e=>e.innerText.trim()).filter(Boolean),headings:[...document.querySelectorAll(".table-title,.program-info")].slice(0,20).map(e=>e.innerText.trim().slice(0,100))}));
+      console.log("TODAY_LIST",JSON.stringify(info));
+    });
+    return programOK&&todayOK;
   }
   throw Error("Unsupported diagnostic station");
 }
 
 async function main(){
   const selected=process.argv[2]||"all";
-  const ids=selected==="all"?["alpha_station","crossfm","fm_yokohama"]:[selected];
+  const ids=selected==="all"?["crossfm","fm_yokohama"]:[selected];
   if(ids.some(id=>!["alpha_station","crossfm","fm_yokohama"].includes(id)))throw new Error("Unknown station");
   const {browser}=await openBrowser();
   const results=[];

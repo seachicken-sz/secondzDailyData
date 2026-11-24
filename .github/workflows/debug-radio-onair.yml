@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
     inputs:
       station:
-        description: "all = alpha_station, crossfm, fm_yokohama; jfn = TOKYO FM"
+        description: "all = crossfm, fm_yokohama; jfn = TOKYO FM"
         required: true
         type: choice
         default: all
