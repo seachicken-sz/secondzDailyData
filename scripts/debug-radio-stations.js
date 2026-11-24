@@ -3,13 +3,13 @@ const {openBrowser}=require("./common/browser");
 const {jstDates}=require("./common/datetime");
 const stations={
   fm802:"https://funky802.com/site/onairlist/",
-  fm_cocolo:"https://www.cocolo.jp/site/onairlist",
+  fm_cocolo:"https://cocolo.jp/site/onairlist",
   tokai_radio:"https://www.tokairadio.co.jp/program/onair/",
   fm_yokohama:"https://www.fmyokohama.co.jp/songsearch",
   nack5:"https://www.nack5.co.jp/on-air-music/",
   interfm:"https://www.interfm.co.jp/search",
   crossfm:"https://www.crossfm.co.jp/msearch/w_index.php",
-  fmfuji:"https://www2.fmfuji.jp/noasf.php",
+  fmfuji:"https://fmfuji.jp/noa/noasf.php",
   alpha_station:"https://fm-kyoto.jp/nowonair/"
 };
 async function inspect(page,id,stage){
@@ -27,7 +27,10 @@ async function inspect(page,id,stage){
         const headings=[...document.querySelectorAll("h1,h2,h3,h4,h5,h6")].filter(visible).slice(0,35).map(e=>({...desc(e),text:clean(e.textContent).slice(0,100)}));
         const labels=[...document.querySelectorAll("body *")].filter(e=>!e.children.length&&visible(e)&&/^(TIME|TITLE|ARTIST|ON AIR|曲名|楽曲名|アーティスト名?|放送時刻|オンエア時刻|検索結果)$/i.test(clean(e.textContent))).slice(0,30).map(e=>({label:clean(e.textContent),chain:chain(e)}));
         const tables=[...document.querySelectorAll("table")].slice(0,10).map(t=>({...desc(t),rows:t.rows.length,firstRows:[...t.rows].slice(0,3).map(r=>[...r.cells].map(desc))}));
-        return {title:document.title,headings,fields,buttons,labels,timeCount:times.length,rowShapes,tables,forms:[...document.forms].map(f=>({...desc(f),method:f.method,action:new URL(f.action,location.href).pathname})),frames:[...document.querySelectorAll("iframe")].map(desc)};
+        const dateLabels=[...document.querySelectorAll("body *")].filter(e=>!e.children.length&&visible(e)&&/^(?:\d{4}[年\/.-]\d{1,2}[月\/.-]\d{1,2}日?|\d{1,2}月\d{1,2}日)(?:\s*[（(].{1,5}[）)])?$/.test(clean(e.textContent))).slice(0,12).map(e=>({...desc(e),text:clean(e.textContent),chain:chain(e)}));
+        const archiveLinks=[...document.querySelectorAll("a")].filter(visible).filter(e=>/過去|履歴|前日|昨日|archive|back number/i.test(clean(e.innerText))).slice(0,20).map(e=>({...desc(e),label:clean(e.innerText).slice(0,80),path:new URL(e.href,location.href).pathname}));
+        const tableHeaders=[...document.querySelectorAll("table.songs,table.table_style02")].map(t=>({className:t.className,headers:[...t.querySelectorAll("th")].slice(0,10).map(e=>clean(e.innerText))}));
+        return {title:document.title,dateLabels,archiveLinks,tableHeaders,headings,fields,buttons,labels,timeCount:times.length,rowShapes,tables,forms:[...document.forms].map(f=>({...desc(f),method:f.method,action:new URL(f.action,location.href).pathname})),frames:[...document.querySelectorAll("iframe")].map(desc)};
       });
       console.log("DOM",id,stage,new URL(frame.url()).origin,new URL(frame.url()).pathname,JSON.stringify(data));
     }catch(e){console.log("FRAME_ERROR",id,stage,String(e.message).slice(0,300));}
@@ -49,7 +52,7 @@ async function search(frame,date){
         if(e.tagName==="SELECT"){
           const kind=/year|年/.test(name)?"year":/month|月/.test(name)?"month":/day|日/.test(name)?"day":null;
           const n={year:y,month:m,day:d}[kind];
-          if(kind){const o=[...e.options].find(o=>Number(clean(o.textContent).replace(/[年月日]/g,""))===n||Number(o.value)===n);if(o)choices.push({e,value:o.value,kind});}
+          if(kind){const o=[...e.options].find(o=>Number(clean(o.textContent).replace(/[年月日]/g,""))===n||Number(String(o.value).replace(/[年月日]/g,""))===n);if(o)choices.push({e,value:o.value,kind});}
         }
         if(e.type==="text"&&/artist|アーティスト/.test(name))choices.push({e,value:"timelesz",kind:"artist"});
       }
@@ -75,6 +78,69 @@ async function search(frame,date){
   await frame.locator('[data-radio-debug-submit="1"]').click({timeout:10000});
   return true;
 }
+
+async function uniqueVisible(scope,selector){
+  const loc=scope.locator(selector).filter({visible:true});
+  if(await loc.count()!==1)throw new Error("Expected one visible control: "+selector);
+  return loc;
+}
+async function submitFor(field){
+  const form=field.locator("xpath=ancestor::form[1]");
+  if(await form.count()!==1)throw new Error("Search form not found");
+  const buttons=form.locator('button,input[type=submit],input[type=button]').filter({visible:true});
+  const candidates=[];
+  for(const b of await buttons.all()){
+    const label=await b.evaluate(e=>(e.innerText||e.value||e.getAttribute("aria-label")||"").trim());
+    if(/^(検索(?:する)?|表示(?:する)?|GO|Search)$/i.test(label))candidates.push(b);
+  }
+  if(candidates.length!==1)throw new Error("Search submit not unique");
+  await candidates[0].click({timeout:10000});
+}
+async function stationSearch(page,id,date){
+  const [y,m,d]=date.split("-").map(Number);
+  if(id==="tokai_radio"){
+    const field=await uniqueVisible(page,"select#time");
+    await field.selectOption(date,{timeout:5000});
+    return true;
+  }
+  if(id==="nack5"){
+    const year=await uniqueVisible(page,'select[name="year"]');
+    await year.selectOption(y+"年",{timeout:5000});
+    await (await uniqueVisible(page,'select[name="month"]')).selectOption(m+"月",{timeout:5000});
+    const day=await uniqueVisible(page,'select[name="day"]');
+    await day.selectOption(d+"日",{timeout:5000});
+    await submitFor(day);
+    return true;
+  }
+  if(id==="crossfm"){
+    const field=await uniqueVisible(page,'select[name="seldate"]');
+    await field.selectOption(date,{timeout:5000});
+    await (await uniqueVisible(page,'select[name="selhour"]')).selectOption("12",{timeout:5000});
+    await submitFor(field);
+    return true;
+  }
+  if(id==="fm_yokohama"){
+    const link=page.getByText("日時で検索",{exact:true}).filter({visible:true});
+    if(await link.count()!==1)throw new Error("Date search control not unique");
+    await link.click({timeout:10000});
+    await page.waitForTimeout(3000);
+    for(const p of page.context().pages())await inspect(p,id,"date_form");
+    return true;
+  }
+  if(id==="interfm"){
+    const url=new URL(stations[id]);
+    for(const [k,v] of Object.entries({a:"timelesz",sd:date,st:"00:00",ed:date,et:"23:59"}))url.searchParams.set(k,v);
+    const response=await page.goto(url.href,{waitUntil:"domcontentloaded",timeout:35000});
+    if(!response?.ok())throw new Error("Search HTTP "+response?.status());
+    return true;
+  }
+  if(id==="alpha_station"){
+    console.log("CURRENT_LIST_ONLY",id,"date and archive links need verification");
+    return false;
+  }
+  return null;
+}
+
 async function main(){
   const selected=process.argv[2]||"all";
   const ids=selected==="all"?Object.keys(stations):[selected];
@@ -93,10 +159,14 @@ async function main(){
         if(!response?.ok())throw new Error("Page HTTP "+response?.status());
         await page.waitForTimeout(5000);
         await inspect(page,id,"before");
-        let searched=false;
-        for(const frame of page.frames()){
-          if(!/^https?:/.test(frame.url()))continue;
-          if(await search(frame,jstDates(2)[1])){searched=true;break;}
+        let searched=await stationSearch(page,id,jstDates(2)[1]);
+        if(searched===null){
+          searched=false;
+          for(const frame of page.frames()){
+            if(frame!==page.mainFrame()&&new URL(frame.url()).origin!==new URL(page.url()).origin)continue;
+            if(!/^https?:/.test(frame.url()))continue;
+            if(await search(frame,jstDates(2)[1])){searched=true;break;}
+          }
         }
         if(searched){
           await page.waitForTimeout(5000);
