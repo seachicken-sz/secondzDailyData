@@ -240,7 +240,7 @@ async function probe(page,id,date){
     };
     await report("initial");
     let ok=true;
-    for(const hour of ["00","05","06","12","13","14","15","23"]){
+    for(const hour of ["07","08","09","10","11","16","17","18"]){
       const success=await step(id,"hour"+hour,async()=>{
         await (await uniqueVisible(page,'select[name="seldate"]')).selectOption(date,{timeout:5000});
         await (await uniqueVisible(page,'select[name="selhour"]')).selectOption(hour,{timeout:5000});
@@ -273,23 +273,27 @@ async function probe(page,id,date){
         return {controls:controls.slice(0,80),programInfo:[...(root?.querySelectorAll(".program-info,.program,.table-title")||[])].slice(0,30).map(e=>({cls:e.className,text:clean(e.innerText).slice(0,120),children:[...e.children].map(c=>({tag:c.tagName,cls:c.className}))}))};
       });
       console.log("PROGRAM_CHOICES",JSON.stringify(details));
-      const selects=page.locator(".program-wrap select").filter({visible:true});
-      const choices=[];
-      for(const loc of await selects.all()){
-        const data=await loc.evaluate(e=>({name:e.name+" "+e.id,options:[...e.options].filter(o=>!o.disabled&&o.value&&!/選択|指定なし/.test(o.textContent)).map(o=>({value:o.value,label:o.textContent.trim()}))}));
-        if(/program|bangumi|番組/i.test(data.name)&&data.options.length)choices.push({loc,option:data.options[0]});
-      }
-      if(choices.length!==1){console.log("PROGRAM_SELECTION_PENDING","Inspect PROGRAM_CHOICES for link or radio controls");return;}
-      const p=choices[0];await p.loc.selectOption(p.option.value,{timeout:5000});
-      console.log("PROGRAM_SELECTED",p.option.label.slice(0,100));
-      await searchClick(page);
+      const program=page.locator(".program-wrap .title a").filter({visible:true,hasText:/^Lovely Day$/});
+      if(await program.count()!==1)throw Error("Expected one Lovely Day program link");
+      console.log("PROGRAM_SELECTED","Lovely Day");
+      await program.click({timeout:10000});
+      await page.waitForTimeout(5000);
       await snapshot(page,id,"program_result");
+      const result=await page.evaluate(()=>{
+        const clean=s=>String(s||"").replace(/\s+/g," ").trim();
+        const rows=[...document.querySelectorAll(".table-4 .program-left")];
+        return {rows:rows.length,times:rows.map(e=>clean(e.querySelector(".time")?.innerText)).filter(Boolean),validRows:rows.filter(e=>/^\d{1,2}:\d{2}(?::\d{2})?$/.test(clean(e.querySelector(".time")?.innerText))&&clean(e.querySelector(".title")?.innerText)&&clean(e.querySelector(".artist")?.innerText)).length,programLabels:[...document.querySelectorAll(".program-info,.table-title,.program-wrap h2,.program-wrap h3")].slice(0,20).map(e=>({cls:e.className,text:clean(e.innerText).slice(0,120)})),dateLabels:[...document.querySelectorAll(".program-wrap *")].filter(e=>!e.children.length&&/\d{4}[年\/.-]\d{1,2}[月\/.-]\d{1,2}/.test(clean(e.innerText))).slice(0,15).map(e=>({cls:e.className,text:clean(e.innerText).slice(0,100)}))};
+      });
+      console.log("PROGRAM_RESULT",JSON.stringify(result));
+      if(!result.validRows)throw Error("No verified program rows");
     });
     const todayOK=await step(id,"today_list",async()=>{
       await visit(page,new URL("/songsearch/today.html",stations[id]).href);
       await snapshot(page,id,"today_list");
       const info=await page.evaluate(()=>({rows:document.querySelectorAll(".table-4 .program-left").length,times:[...document.querySelectorAll(".table-4 .program-left .time")].map(e=>e.innerText.trim()).filter(Boolean),headings:[...document.querySelectorAll(".table-title,.program-info")].slice(0,20).map(e=>e.innerText.trim().slice(0,100))}));
       console.log("TODAY_LIST",JSON.stringify(info));
+      const links=await page.evaluate(()=>[...document.querySelectorAll("a[href]")].filter(e=>e.getClientRects().length).map(e=>({label:e.innerText.trim(),url:new URL(e.href,location.href)})).filter(e=>e.url.origin===location.origin&&e.url.pathname.includes("/songsearch")&&/過去|前日|昨日|一覧|日付|今日|検索/.test(e.label)).map(e=>({label:e.label,path:e.url.pathname,queryKeys:[...e.url.searchParams.keys()]})));
+      console.log("PUBLIC_HISTORY_LINKS",JSON.stringify(links));
     });
     return programOK&&todayOK;
   }

@@ -4,7 +4,7 @@ const path=require("node:path");
 const {callGas}=require("./common/gas");
 const {openBrowser}=require("./common/browser");
 const {jstDates}=require("./common/datetime");
-const collectors={jfn:require("./radio/collectors/jfn").collect,nack5:require("./radio/collectors/nack5").collect,tokairadio:require("./radio/collectors/tokairadio").collect};
+const collectors={jfn:require("./radio/collectors/jfn").collect,nack5:require("./radio/collectors/nack5").collect,tokairadio:require("./radio/collectors/tokairadio").collect,alpha_station:require("./radio/collectors/alpha-station").collect,alpha:require("./radio/collectors/alpha-station").collect};
 const gas=(action,extra)=>callGas(process.env.RADIO_WEB_APP_URL,process.env.RADIO_SYNC_TOKEN,action,extra);
 const wait=ms=>new Promise(r=>setTimeout(r,ms));
 const errorText=e=>String(e?.message||e).slice(0,500);
