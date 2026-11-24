@@ -1,7 +1,7 @@
 "use strict";
 const {openBrowser,openPage}=require("./common/browser");
 const {jstDates}=require("./common/datetime");
-const {timeSeconds,validPrograms,validateRows}=require("./radio/collectors/fm-yokohama");
+const {programRange,validPrograms,validateRows}=require("./radio/collectors/fm-yokohama");
 const {normalize}=require("./radio/normalize");
 const url="https://www.fmyokohama.co.jp/songsearch/program-form.html";
 function schedule(){
@@ -63,10 +63,10 @@ async function main(){
     const s=result.data;
     if(blocked)throw Error("Access restriction detected");
     const issues=s.rows.flatMap((r,i)=>{
-     const reasons=[];const t=timeSeconds(r.time),prev=i?timeSeconds(s.rows[i-1].time):null;
+     const reasons=[];const t=programRange(r.time),prev=i?programRange(s.rows[i-1].time):null;
      if(!normalize(r.name))reasons.push("empty_name");
      if(t===null)reasons.push("invalid_time");
-     if(i&&t!==null&&prev!==null&&t<=prev)reasons.push(t===prev?"duplicate_start":"reverse_order");
+     if(i&&t!==null&&prev!==null&&t.start<prev.start)reasons.push("reverse_order");
      return reasons.length?[{index:i,time:r.time,name:r.name,previous:s.rows[i-1]?.time,reasons}]:[];
     });
     entry.programCount=s.rows.length;entry.valid=validPrograms(s,date);
@@ -77,6 +77,12 @@ async function main(){
     add(s.rows.findIndex(r=>normalize(r.name)==="放送休止中"));
     add(s.rows.findIndex(r=>normalize(r.name)==="Lovely Day"));
     for(const issue of issues){add(issue.index);add(issue.index-1);}
+    for(let i=0;i<s.rows.length;i++){
+      const a=programRange(s.rows[i].time);
+      if(!a)continue;
+      const parent=s.rows.findIndex((r,j)=>{const b=programRange(r.time);return j!==i&&b&&b.start<=a.start&&b.end>=a.end&&(b.start<a.start||b.end>a.end);});
+      if(parent>=0){add(parent);add(i);}
+    }
     add(0);add(s.rows.length-1);add(Math.floor(s.rows.length/2));
     for(const i of picks){
      if(blocked)break;
@@ -88,7 +94,7 @@ async function main(){
      const r=await settle(page,songs);
      if(blocked)throw Error("Access restriction detected");
      const v=r.data;
-     const start=timeSeconds(row.time),end=i+1<s.rows.length?timeSeconds(s.rows[i+1].time):86400;
+     const {start=null,end=null}=programRange(row.time)||{};
      const details={index:i,program:row.name,start:row.time,nextStart:s.rows[i+1]?.time,stable:r.stable,selected:v.selected,title:v.title,header:v.header,rows:v.rows.length,times:v.rows.map(x=>x.time),invalidRows:v.rows.filter(x=>!validateRows([x])).length,withinCurrentBounds:start!==null&&end!==null&&validateRows(v.rows,start,end),emptyText:v.emptyText,children:v.children,paging:v.paging};
      console.log("YOKOHAMA_PROGRAM_PROBE",date,JSON.stringify(details));
      entry.probes.push({index:i,rows:v.rows.length,stable:r.stable});

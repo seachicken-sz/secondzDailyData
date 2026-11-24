@@ -9,6 +9,12 @@ function timeSeconds(value){
   const m=normalize(value).match(/^(\d{1,2}):([0-5]\d)(?::([0-5]\d))?$/);
   return m&&+m[1]<24?+m[1]*3600+ +m[2]*60+ +(m[3]||0):null;
 }
+function programRange(value){
+  const m=normalize(value).match(/^(\d{1,2}:[0-5]\d)\s*[~〜～–-]\s*(\d{1,2}:[0-5]\d)$/);
+  if(!m)return null;
+  const start=timeSeconds(m[1]),end=m[2]==="24:00"?86400:timeSeconds(m[2]);
+  return start!==null&&end!==null&&start<end?{start,end}:null;
+}
 function validateRows(rows,start=0,end=86400){
   return rows.every(r=>{
     const t=timeSeconds(r.time);
@@ -33,7 +39,8 @@ function readSongs(){
   const rows=[...(root?.querySelectorAll(".table-4 .program-left")||[])].filter(e=>e.getClientRects().length).map(e=>({time:clean(e.querySelector(".time")),song_name:clean(e.querySelector(".title")),artist_name:clean(e.querySelector(".artist"))}));
   const selected=["ReqYear","ReqMon","ReqDay"].map(id=>document.getElementById(id)?.value||"").join("-");
   const paging=[...(root?.querySelectorAll("a,button")||[])].filter(e=>e.getClientRects().length).some(e=>/^(次へ|次のページ|もっと見る|Next|Load more|[0-9]+)$/i.test(clean(e))||e.rel==="next");
-  const empty=!!root&&rows.length===0&&/該当する(?:曲|楽曲).{0,10}(?:ありません|ございません)|(?:曲|楽曲)(?:は|が)ありません|検索結果\s*[：:]?\s*0\s*件/.test(clean(root));
+  const headerOnly=!!root&&rows.length===0&&!!root.querySelector(".music-title")&&!!root.querySelector(".table-wrap > .table-title")&&root.querySelector(".table-wrap").children.length===1&&clean(root.querySelector(".table-wrap")).replace(/\s+/g," ").toUpperCase()==="TIME TITLE ARTIST";
+  const empty=headerOnly||!!root&&rows.length===0&&/該当する(?:曲|楽曲).{0,10}(?:ありません|ございません)|(?:曲|楽曲)(?:は|が)ありません|検索結果\s*[：:]?\s*0\s*件/.test(clean(root));
   return {present:!!root,header:clean(header).replace(/\s+/g," ").toUpperCase(),title:clean(root?.querySelector(".music-title")),selected,rows,paging,empty};
 }
 function readPrograms(){
@@ -44,7 +51,7 @@ function readPrograms(){
 }
 function validPrograms(result,date){
   const rows=result.rows;
-  return result.present&&result.selected===date&&rows.length>0&&rows.length<=60&&rows.every((r,i)=>normalize(r.name)&&timeSeconds(r.time)!==null&&(i===0||timeSeconds(r.time)>timeSeconds(rows[i-1].time)));
+  return result.present&&result.selected===date&&rows.length>0&&rows.length<=60&&rows.every((r,i)=>normalize(r.name)&&programRange(r.time)!==null&&(i===0||programRange(rows[i-1].time)!==null&&programRange(r.time).start>=programRange(rows[i-1].time).start));
 }
 async function selectDate(page,date){
   const [y,m,d]=date.split("-");
@@ -80,8 +87,7 @@ async function collect(page,station,date){
     const key=JSON.stringify(schedule.rows);
     for(let i=0;i<schedule.rows.length;i++){
       const entry=schedule.rows[i];
-      const start=timeSeconds(entry.time);
-      const end=i+1<schedule.rows.length?timeSeconds(schedule.rows[i+1].time):86400;
+      const {start,end}=programRange(entry.time);
       if(normalize(entry.name)==="放送休止中")continue;
       await page.waitForTimeout(delay);
       const current=await page.evaluate(readPrograms);
@@ -95,13 +101,30 @@ async function collect(page,station,date){
         const title=normalize(r.title),name=normalize(entry.name);
         return r.present&&r.selected===date&&(title===name||title===name+" オンエア曲")&&!r.paging&&(r.empty||(r.header==="TIME TITLE ARTIST"&&r.rows.length>0&&validateRows(r.rows,start,end)));
       },"program "+entry.name);
-      rows.push(...result.rows.map(r=>({...r,program_name:entry.name})));
+      rows.push(...result.rows.map(r=>({...r,program_name:entry.name,program_start:start,program_end:end})));
       console.log("FM YOKOHAMA program",date,entry.name,"rows="+result.rows.length);
     }
   }
+  if(date!==today)rows=deduplicatePrograms(rows,date);
   if(!rows.length)throw Error("Unverified song table: FM Yokohama no daily rows");
   const items=normalizeRows(rows,date);
   console.log("FM YOKOHAMA result",date,"rows="+rows.length,"matched="+items.length);
   return {fetched_count:rows.length,items};
 }
-module.exports={collect,timeSeconds,validateRows,validPrograms};
+function deduplicatePrograms(rows,date){
+  const groups=new Map();
+  for(const r of rows){
+    const key=JSON.stringify([timeSeconds(r.time),normalize(r.song_name).toLowerCase(),normalize(r.artist_name).toLowerCase()]);
+    if(!groups.has(key))groups.set(key,[]);
+    groups.get(key).push(r);
+  }
+  return [...groups.values()].map(group=>{
+    const parents=group.filter(a=>group.every(b=>a.program_start<=b.program_start&&a.program_end>=b.program_end));
+    const names=new Set(parents.map(r=>normalize(r.program_name)));
+    if(names.size===1)return parents[0];
+    if(group.length===1)return group[0];
+    console.log("FM YOKOHAMA ambiguous program",date,group[0].time,"candidates="+[...new Set(group.map(r=>r.program_name))].join(" | "));
+    return {...group[0],program_name:""};
+  });
+}
+module.exports={collect,timeSeconds,programRange,validateRows,validPrograms,deduplicatePrograms};
