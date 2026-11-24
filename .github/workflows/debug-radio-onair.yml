@@ -3,21 +3,15 @@ on:
   workflow_dispatch:
     inputs:
       station:
-        description: "all = six active investigation stations; jfn = TOKYO FM"
+        description: "all = alpha_station, crossfm, fm_yokohama; jfn = TOKYO FM"
         required: true
         type: choice
         default: all
         options:
           - all
           - jfn
-          - fm802
-          - fm_cocolo
-          - tokai_radio
           - fm_yokohama
-          - nack5
-          - interfm
           - crossfm
-          - fmfuji
           - alpha_station
 permissions:
   contents: read

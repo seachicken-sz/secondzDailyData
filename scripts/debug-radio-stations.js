@@ -166,66 +166,128 @@ async function facts(page,id,stage){
   });
   console.log("RESULT_FACTS",id,stage,JSON.stringify(result));
 }
+
+async function step(id,name,fn){
+  try{await fn();console.log("PROBE_OK",id,name);return true;}
+  catch(e){console.log("PROBE_ERROR",id,name,String(e.message).slice(0,400));return false;}
+}
+async function snapshot(page,id,stage){
+  await inspect(page,id,stage);
+  await facts(page,id,stage);
+  const info=await page.evaluate(()=>{
+    const clean=s=>String(s||"").normalize("NFKC").replace(/\s+/g," ").trim();
+    const visible=e=>!!e.getClientRects().length;
+    const root=document.querySelector("#noa-container");
+    const current=root?[...root.children].filter(e=>!e.matches("table,.arrow_l,.arrow_r")&&!e.querySelector("table")).map(e=>({tag:e.tagName,cls:e.className,text:clean(e.innerText).slice(0,100)})):null;
+    const table=document.querySelector("table.songs, #noa-container table.table_style02");
+    const rows=[...(table?.rows||[])].filter(r=>r.cells[0]?.tagName==="TD");
+    const times=rows.map(r=>clean(r.cells[0]?.innerText)).filter(t=>/^\d{1,2}:\d{2}$/.test(t));
+    const artistCells=rows.slice(0,3).map(r=>({children:[...(r.cells[2]?.children||[])].map(e=>({tag:e.tagName,cls:e.className})),directTextLength:[...(r.cells[2]?.childNodes||[])].filter(n=>n.nodeType===3).map(n=>clean(n.textContent)).join("").length}));
+    const options=[...document.querySelectorAll('select[name="selhour"] option')].map(o=>({value:o.value,label:clean(o.textContent)}));
+    const controls=[...document.querySelectorAll("a,button,input,[role=button],.arrow_l,.arrow_r")].filter(visible).filter(e=>/^(検索(?:する)?|番組名で検索|日時で検索|次へ|前へ)$/.test(clean(e.innerText||e.value||e.getAttribute("alt")))||e.matches(".arrow_l,.arrow_r")).slice(0,25).map(e=>({tag:e.tagName,id:e.id,cls:e.className,label:clean(e.innerText||e.value).slice(0,60),type:e.getAttribute("type"),children:[...e.children].map(c=>({tag:c.tagName,cls:c.className,alt:c.getAttribute("alt")}))}));
+    const programRows=[...document.querySelectorAll('[id="program-list"]')].slice(0,3).map(e=>({children:[...e.children].map(c=>({tag:c.tagName,cls:c.className})),parentClass:e.parentElement?.className}));
+    return {current,options,times,artistCells,controls,programRows,programRowCount:document.querySelectorAll('[id="program-list"]').length};
+  });
+  console.log("TARGET_FACTS",id,stage,JSON.stringify(info));
+}
+async function searchClick(page){
+  const candidates=page.locator('a,button,input[type="submit"],input[type="button"],input[type="image"],[role="button"]').filter({visible:true});
+  const matches=[];
+  for(const loc of await candidates.all()){
+    const yes=await loc.evaluate(e=>/^(検索(?:する)?|Search|GO)$/i.test(String(e.innerText||e.value||e.getAttribute("alt")||e.getAttribute("aria-label")||e.querySelector("img")?.alt||"").trim()));
+    if(yes)matches.push(loc);
+  }
+  console.log("SEARCH_CONTROL_COUNT",matches.length);
+  if(matches.length!==1)throw Error("Search control not unique");
+  await matches[0].click({timeout:10000});
+  await page.waitForTimeout(4000);
+}
 async function probe(page,id,date){
   const [y,m,d]=date.split("-");
-  if(id==="nack5"){
-    await visit(page,new URL(date.replace(/-/g,"")+".html",stations[id]).href);
-    await inspect(page,id,"daily_url");
-    await facts(page,id,"daily_url");
-    return true;
+  if(id==="alpha_station"){
+    await visit(page,stations[id]);
+    await snapshot(page,id,"today");
+    let ok=true;
+    for(let i=1;i<=2;i++){
+      const success=await step(id,"previous_"+i,async()=>{
+        const target=jstDates(3)[i].replace(/-/g,".");
+        const loc=page.locator("#noa-container .arrow_l").filter({visible:true,hasText:target});
+        const first=loc.first();
+        if(!await loc.count())throw Error("Previous date control missing: "+target);
+        const child=first.locator("a,button,[role=button]").filter({visible:true});
+        if(await child.count()===1)await child.click({timeout:10000});else await first.click({timeout:10000});
+        await page.waitForTimeout(5000);
+        await snapshot(page,id,"previous_"+i);
+      });
+      if(!success){ok=false;break;}
+    }
+    return ok;
   }
   if(id==="crossfm"){
-    const u=new URL(stations[id]);
-    for(const [k,v] of Object.entries({mode:"0",page:"0",seldate:date,selhour:""}))u.searchParams.set(k,v);
-    await visit(page,u.href);
-    await inspect(page,id,"daily_page0");
-    await facts(page,id,"daily_page0");
-    const next=await page.evaluate(date=>[...document.querySelectorAll("a[href]")].map(e=>new URL(e.href,location.href)).find(u=>u.origin===location.origin&&u.pathname===location.pathname&&u.searchParams.get("seldate")===date&&Number(u.searchParams.get("page"))>0&& !u.searchParams.get("selhour"))?.href,date);
-    if(next){await visit(page,next);await facts(page,id,"daily_next");}
-    return true;
-  }
-  if(id==="interfm"){
-    const url=new URL(stations[id]);
-    for(const [k,v] of Object.entries({a:"timelesz",sd:date,st:"00:00",ed:date,et:"23:59"}))url.searchParams.set(k,v);
-    await visit(page,url.href);
-    await inspect(page,id,"direct_search");
-    await facts(page,id,"direct_search");
-    return true;
+    await visit(page,stations[id]);
+    await snapshot(page,id,"form");
+    const hour=await uniqueVisible(page,'select[name="selhour"]');
+    const opts=await hour.evaluate(e=>[...e.options].map(o=>({value:o.value,label:o.textContent.trim()})));
+    const all=opts.find(o=>o.value===""||/^(全時間|全日|指定なし|すべて|全て|時間指定なし)$/.test(o.label));
+    const values=[...(all?[{stage:"all_hours",value:all.value}]:[]),{stage:"hour12",value:"12"},{stage:"hour13",value:"13"},{stage:"hour00",value:"00"}];
+    let ok=true;
+    for(const item of values){
+      const success=await step(id,item.stage,async()=>{
+        await (await uniqueVisible(page,'select[name="seldate"]')).selectOption(date,{timeout:5000});
+        await (await uniqueVisible(page,'select[name="selhour"]')).selectOption(item.value,{timeout:5000});
+        await submitFor(await uniqueVisible(page,'select[name="seldate"]'));
+        await page.waitForTimeout(4000);
+        await snapshot(page,id,item.stage);
+      });
+      if(!success){ok=false;break;}
+      await page.waitForTimeout(3000);
+    }
+    return ok;
   }
   if(id==="fm_yokohama"){
-    await visit(page,new URL("/songsearch/time-form.html",stations[id]).href);
-    for(const [sel,v] of Object.entries({"#ReqYear":y,"#ReqMon":m,"#ReqDay":d,"#HourSelect":"12","#MinSelect":"00"}))await (await uniqueVisible(page,sel)).selectOption(v,{timeout:5000});
-    await submitFor(await uniqueVisible(page,"#ReqDay"));
-    await page.waitForTimeout(4000);
-    await inspect(page,id,"time_result");
-    await facts(page,id,"time_result");
-    await visit(page,new URL("/songsearch/program-form.html",stations[id]).href);
-    await inspect(page,id,"program_form");
-    return true;
+    const timeOK=await step(id,"time_search",async()=>{
+      await visit(page,new URL("/songsearch/time-form.html",stations[id]).href);
+      await snapshot(page,id,"time_form");
+      for(const [sel,v] of Object.entries({"#ReqYear":y,"#ReqMon":m,"#ReqDay":d,"#HourSelect":"12","#MinSelect":"00"}))await (await uniqueVisible(page,sel)).selectOption(v,{timeout:5000});
+      await searchClick(page);
+      await snapshot(page,id,"time_result");
+    });
+    const programOK=await step(id,"program_search",async()=>{
+      await visit(page,stations[id]);
+      const link=page.getByText("番組名で検索",{exact:true}).filter({visible:true});
+      if(await link.count()!==1)throw Error("Program search link not unique");
+      await link.click({timeout:10000});
+      await page.waitForTimeout(3000);
+      await snapshot(page,id,"program_form");
+      for(const [sel,v] of Object.entries({"#ReqYear":y,"#ReqMon":m,"#ReqDay":d})){
+        const loc=page.locator(sel).filter({visible:true});
+        if(await loc.count()!==1)throw Error("Program date control not confirmed: "+sel);
+        await loc.selectOption(v,{timeout:5000});
+      }
+      await page.waitForTimeout(3000);
+      await snapshot(page,id,"program_date_selected");
+      const program=page.locator('select').filter({visible:true});
+      const candidates=[];
+      for(const loc of await program.all()){
+        const data=await loc.evaluate(e=>({name:e.name+" "+e.id,options:[...e.options].filter(o=>!o.disabled&&o.value&& !/選択|指定なし/.test(o.textContent)).map(o=>({value:o.value,label:o.textContent.trim()}))}));
+        if(/program|bangumi|番組/i.test(data.name)&&data.options.length)candidates.push({loc,option:data.options[0]});
+      }
+      if(candidates.length!==1)throw Error("Program select not confirmed");
+      const p=candidates[0];
+      await p.loc.selectOption(p.option.value,{timeout:5000});
+      console.log("PROGRAM_SELECTED",p.option.label.slice(0,100));
+      await searchClick(page);
+      await snapshot(page,id,"program_result");
+    });
+    return timeOK&&programOK;
   }
-  await visit(page,stations[id]);
-  await inspect(page,id,"before");
-  await facts(page,id,"before");
-  if(id==="tokai_radio"){
-    await (await uniqueVisible(page,"select#time")).selectOption(date,{timeout:5000});
-    await page.waitForTimeout(5000);
-    await inspect(page,id,"after_date");
-    await facts(page,id,"after_date");
-    return true;
-  }
-  if(id==="alpha_station"){
-    await page.waitForTimeout(5000);
-    await facts(page,id,"after_5s");
-    console.log("CURRENT_LIST_ONLY",id,"no date selection confirmed");
-    return false;
-  }
-  return false;
+  throw Error("Unsupported diagnostic station");
 }
 
 async function main(){
   const selected=process.argv[2]||"all";
-  const ids=selected==="all"?["tokai_radio","fm_yokohama","nack5","interfm","crossfm","alpha_station"]:[selected];
-  if(ids.some(id=>!Object.hasOwn(stations,id)))throw new Error("Unknown station");
+  const ids=selected==="all"?["alpha_station","crossfm","fm_yokohama"]:[selected];
+  if(ids.some(id=>!["alpha_station","crossfm","fm_yokohama"].includes(id)))throw new Error("Unknown station");
   const {browser}=await openBrowser();
   const results=[];
   try{
@@ -237,7 +299,7 @@ async function main(){
       page.on("response",r=>{if(r.request().resourceType()==="document")console.log("DOCUMENT",id,r.status(),r.url().split("?")[0]);});
       try{
         const searched=await probe(page,id,jstDates(2)[1]);
-        results.push({id,status:searched?"searched":"inspected_only"});
+        results.push({id,status:searched?"probes_completed":"partial_or_failed"});
       }catch(e){console.log("STATION_ERROR",id,String(e.message).slice(0,500));results.push({id,status:"error"});}
       finally{await context.close();}
       await new Promise(r=>setTimeout(r,3000));
