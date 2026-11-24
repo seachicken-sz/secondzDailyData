@@ -1,7 +1,5 @@
 name: Capture Stationhead
 on:
-  schedule:
-    - cron: '0 * * * *'
   workflow_dispatch:
 permissions:
   contents: read
@@ -10,7 +8,6 @@ concurrency:
   cancel-in-progress: false
 jobs:
   capture:
-    if: vars.STATIONHEAD_CAPTURE_AUTHORIZED == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 8
     steps:
@@ -22,6 +19,5 @@ jobs:
       - run: npx playwright install --with-deps chromium
       - run: node scripts/capture-stationhead.js
         env:
-          STATIONHEAD_CAPTURE_AUTHORIZED: ${{ vars.STATIONHEAD_CAPTURE_AUTHORIZED }}
           STATIONHEAD_GAS_URL: ${{ secrets.STATIONHEAD_GAS_URL }}
           STATIONHEAD_GAS_TOKEN: ${{ secrets.STATIONHEAD_GAS_TOKEN }}
