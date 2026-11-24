@@ -11,19 +11,25 @@ async function main(){
   const {browser,context}=await openBrowser();
   const run_id=process.env.GITHUB_RUN_ID ? process.env.GITHUB_RUN_ID+"-"+process.env.GITHUB_RUN_ATTEMPT : crypto.randomUUID();
   const run_url=process.env.GITHUB_RUN_ID ? "https://github.com/"+process.env.GITHUB_REPOSITORY+"/actions/runs/"+process.env.GITHUB_RUN_ID : "";
-  let failures=0;
+  let failures=0, skipped=0, succeeded=0;
   try{
     for(const station of items){
       const dates=jstDates(Math.min(7,Math.max(1,Number(station.lookback_days)||3)));
       for(const target_date of dates){
         const log={run_id,run_url,station_id:station.station_id,target_date};
+        const collector=Object.hasOwn(collectors,station.collector_type)?collectors[station.collector_type]:null;
+        if(!collector){
+          skipped++;
+          await gas("recordFetchLog",{...log,status:"skipped",error_message:"Collector not implemented"});
+          console.log(station.station_id,target_date,"skipped: collector not implemented");
+          continue;
+        }
         let page;
         try{
-          const collector=collectors[station.collector_type];
-          if(!collector) throw new Error("Collector not implemented");
           page=await context.newPage();
           const result=await collector(page,station,target_date);
           const saved=await gas("upsertOnair",{...log,...result});
+          succeeded++;
           console.log(station.station_id,target_date,saved);
         }catch(e){
           failures++;
@@ -36,6 +42,7 @@ async function main(){
       }
     }
   }finally{await browser.close();}
+  console.log({succeeded,skipped,failures});
   if(failures)throw new Error(failures+" capture failures");
 }
 main().catch(e=>{console.error(e.message);process.exitCode=1;});
