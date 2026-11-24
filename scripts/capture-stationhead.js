@@ -16,24 +16,27 @@ async function main() {
     const page = await context.newPage();
     await openPage(page, URL);
     if (new globalThis.URL(page.url()).pathname.replace(/\/$/,"") !== "/c/secondz") throw new Error("Unexpected channel");
-    const read = async () => {
-      const body = await page.locator("body").innerText();
+    const stats = page.locator("div.flex.items-center.gap-3.caption-2").filter({
+      hasText: /members[\s\S]*online/i
+    });
+    let counts;
+    try {
+      await stats.waitFor({state:"visible",timeout:60000});
+      const texts = await stats.locator(":scope > span").allTextContents();
       const get = label => {
-        const n = "(\\d[\\d,]*(?:\\.\\d+)?[KM]?)";
-        const matches = [...body.matchAll(new RegExp("(?:^|\\n|[ \\t])"+n+"\\s+"+label+"\\b","gi"))];
-        if (matches.length !== 1) return null;
+        const pattern = new RegExp("^\\s*(\\d[\\d,]*(?:\\.\\d+)?[KM]?)\\s*" + label + "\\s*$","i");
+        const matches = texts.map(text => text.match(pattern)).filter(Boolean);
+        if (matches.length !== 1) throw new Error(label + " count missing or ambiguous");
         return matches[0][1];
       };
-      const members_text = get("Members"), online_text = get("Online");
-      return members_text && online_text ? {members_text,online_text} : null;
-    };
-    let counts;
-    for (let i=0;i<20;i++) {
-      counts = await read();
-      if (counts) break;
-      await page.waitForTimeout(1000);
+      counts = {members_text:get("members"),online_text:get("online")};
+    } catch (error) {
+      console.error("Stationhead page title:", await page.title().catch(() => ""));
+      console.error("Stationhead page URL:", page.url());
+      console.error("Stationhead stats candidates:", JSON.stringify(await page.locator("div.flex.items-center.gap-3.caption-2").allTextContents().catch(() => [])));
+      console.error("Stationhead visible text:", (await page.locator("body").innerText({timeout:5000}).catch(() => "")).slice(0,2000));
+      throw error;
     }
-    if (!counts) throw new Error("Members or Online display not found");
     const now = new Date();
     row = {measured_at: new Date(now.getTime()+9*3600000).toISOString().slice(0,19).replace("T"," "), channel_id:"secondz", members:parseCount(counts.members_text), members_text:counts.members_text, online:parseCount(counts.online_text), online_text:counts.online_text, status:"success"};
   } finally { await browser.close(); }
